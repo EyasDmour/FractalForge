@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebGPU Fractal Master-Map Explorer</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #000;
+        }
+        #canvas-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        #overlayCanvas {
+            pointer-events: none;
+            z-index: 2;
+        }
+        #ui-overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.85);
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            pointer-events: auto;
+            user-select: none;
+            border: 1px solid rgba(0, 255, 204, 0.4);
+            min-width: 260px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.7);
+            z-index: 10;
+        }
+        .control-group {
+            margin-bottom: 12px;
+        }
+        label {
+            display: block;
+            font-size: 11px;
+            margin-bottom: 3px;
+            color: #aaa;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .value-display {
+            float: right;
+            color: #00ffcc;
+            font-weight: bold;
+        }
+        input[type=range] {
+            width: 100%;
+            cursor: pointer;
+            accent-color: #00ffcc;
+        }
+        .zoom-stat {
+            font-size: 14px;
+            margin-bottom: 5px;
+            color: #00ffcc;
+            font-weight: bold;
+        }
+        .label-split {
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+            position: absolute;
+            top: 10px;
+            pointer-events: none;
+            font-family: sans-serif;
+            font-weight: bold;
+            text-shadow: 2px 2px 4px black;
+            z-index: 5;
+        }
+        .view-label {
+            width: 50%;
+            text-align: center;
+            color: rgba(255, 255, 255, 0.6);
+            font-size: 14px;
+            letter-spacing: 2px;
+        }
+        #error-msg {
+            color: white;
+            font-family: sans-serif;
+            text-align: center;
+            margin-top: 20%;
+            display: none;
+        }
+        .seed-btn {
+            background: #222;
+            border: 1px solid #444;
+            color: #ddd;
+            padding: 4px 8px;
+            font-size: 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .seed-btn:hover {
+            background: #333;
+            border-color: #00ffcc;
+            color: white;
+        }
+        .seed-btn.active {
+            background: #00ffcc;
+            color: black;
+            border-color: #00ffcc;
+        }
+        .toggle-container {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 5px;
+            cursor: pointer;
+            font-size: 11px;
+        }
+        .toggle-container input {
+            cursor: pointer;
+            width: auto;
+        }
+    </style>
+</head>
+<body>
+    <div id="error-msg">WebGPU is not supported in your browser.</div>
+    <div class="label-split">
+        <div class="view-label">MANDELBROT (MAP)</div>
+        <div class="view-label">JULIA (DETAIL)</div>
+    </div>
+    <div id="ui-overlay">
+        <div class="zoom-stat" id="m-zoom-display">Map Zoom: 1.0x</div>
+        <div class="zoom-stat" id="j-zoom-display">Julia Zoom: 1.0x</div>
+        
+        <div class="control-group" style="border-top: 1px solid #333; padding-top: 10px; margin-top: 10px;">
+            <label>Julia C: <span id="c-val" class="value-display">0, 0</span></label>
+            <label class="toggle-container">
+                <input type="checkbox" id="lock-julia">
+                <span>Lock Julia Seed (Freeze Follow)</span>
+            </label>
+            <label class="toggle-container">
+                <input type="checkbox" id="show-orbit" checked>
+                <span>Visualize Iteration Orbit</span>
+            </label>
+            <div style="margin-top: 8px;">
+                <label>Orbit Steps <span id="orbit-val" class="value-display">50</span></label>
+                <input type="range" id="orbit-slider" min="1" max="200" step="1" value="50">
+            </div>
+        </div>
+
+        <div class="control-group">
+            <label>Interesting Seeds</label>
+            <div id="preset-container" style="display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px;">
+                <button class="seed-btn" data-c="-0.123, 0.745">Rabbit</button>
+                <button class="seed-btn" data-c="0.36, 0.1">Dragon</button>
+                <button class="seed-btn" data-c="0, 1">Dendrite</button>
+                <button class="seed-btn" data-c="-0.75, 0">San Marco</button>
+                <button class="seed-btn" data-c="-0.391, -0.587">Siegel</button>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <label>Exponent <span id="exp-val" class="value-display">2.0</span></label>
+            <input type="range" id="exp-slider" min="1" max="6" step="0.01" value="2.0">
+        </div>
+        
+        <div class="control-group">
+            <label>Coloring <span id="color-val" class="value-display">0.03</span></label>
+            <input type="range" id="color-slider" min="0.001" max="0.2" step="0.001" value="0.03">
+        </div>
+
+        <div style="font-size: 10px; color: #666; margin-top: 10px; border-top: 1px solid #333; padding-top: 8px;">
+            Hover Left side to change Julia seed (unless locked).<br>
+            Hover either side to Zoom (Scroll) or Pan (Drag).
+        </div>
+    </div>
+
+    <div id="canvas-container">
+        <canvas id="mandelbrotCanvas"></canvas>
+        <canvas id="overlayCanvas"></canvas>
+    </div>
+
+    <script type="module">
+        async function initWebGPU() {
+            if (!navigator.gpu) {
+                document.getElementById('error-msg').style.display = 'block';
+                document.getElementById('ui-overlay').style.display = 'none';
+                return;
+            }
+
+            const adapter = await navigator.gpu.requestAdapter();
+            const device = await adapter.requestDevice();
+            
+            const canvas = document.getElementById('mandelbrotCanvas');
+            const overlay = document.getElementById('overlayCanvas');
+            const ctx = overlay.getContext('2d');
+            const context = canvas.getContext('webgpu');
+            const format = navigator.gpu.getPreferredCanvasFormat();
+            
+            context.configure({ device: device, format: format, alphaMode: 'premultiplied' });
+
+            const uniformBuffer = device.createBuffer({
+                size: 112, // resolution(8), m_center(16), j_center(16), julia_c(16), m_zoom(4), j_zoom(4), exponent(4), color_speed(4), padding
+                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+            });
+
+            const shaderCode = `
+                struct Uniforms {
+                    resolution: vec2<f32>,
+                    m_center_hi: vec2<f32>,
+                    m_center_lo: vec2<f32>,
+                    j_center_hi: vec2<f32>,
+                    j_center_lo: vec2<f32>,
+                    julia_c_hi: vec2<f32>,
+                    julia_c_lo: vec2<f32>,
+                    m_zoom: f32,
+                    j_zoom: f32,
+                    exponent: f32,
+                    color_speed: f32,
+                }
+                
+                @group(0) @binding(0) var<uniform> uniforms: Uniforms;
+
+                fn ds_set(a: f32) -> vec2<f32> { return vec2<f32>(a, 0.0); }
+                fn ds_add(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
+                    let s = a.x + b.x; let v = s - a.x;
+                    let e = (a.x - (s - v)) + (b.x - v) + a.y + b.y;
+                    let hi = s + e; let lo = e - (hi - s);
+                    return vec2<f32>(hi, lo);
+                }
+                fn ds_sub(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> { return ds_add(a, vec2<f32>(-b.x, -b.y)); }
+                fn ds_mul(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
+                    let hi = a.x * b.x; let lo = fma(a.x, b.x, -hi) + a.x * b.y + a.y * b.x;
+                    let s = hi + lo; let e = lo - (s - hi);
+                    return vec2<f32>(s, e);
+                }
+
+                struct VertexOutput {
+                    @builtin(position) position: vec4<f32>,
+                    @location(0) uv: vec2<f32>,
+                }
+
+                @vertex
+                fn vs_main(@builtin(vertex_index) vertexIndex : u32) -> VertexOutput {
+                    var pos = array<vec2<f32>, 6>(
+                        vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(-1.0, 1.0),
+                        vec2<f32>(-1.0, 1.0),  vec2<f32>(1.0, -1.0), vec2<f32>(1.0, 1.0)
+                    );
+                    var output : VertexOutput;
+                    output.position = vec4<f32>(pos[vertexIndex], 0.0, 1.0);
+                    output.uv = pos[vertexIndex] * 0.5 + 0.5; 
+                    output.uv.y = 1.0 - output.uv.y; 
+                    return output;
+                }
+
+                @fragment
+                fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+                    let is_julia = input.uv.x > 0.5;
+                    let half_uv = vec2<f32>(fract(input.uv.x * 2.0), input.uv.y);
+                    let aspect_ratio = (uniforms.resolution.x * 0.5) / uniforms.resolution.y;
+                    let uv_offset = half_uv - vec2<f32>(0.5, 0.5);
+                    
+                    var center_hi: vec2<f32>; var center_lo: vec2<f32>; var zoom_val: f32;
+
+                    if (is_julia) {
+                        center_hi = uniforms.j_center_hi; center_lo = uniforms.j_center_lo; zoom_val = uniforms.j_zoom;
+                    } else {
+                        center_hi = uniforms.m_center_hi; center_lo = uniforms.m_center_lo; zoom_val = uniforms.m_zoom;
+                    }
+
+                    let zoom_ds = ds_set(zoom_val);
+                    let aspect_ds = ds_set(aspect_ratio);
+                    
+                    var px = ds_mul(ds_set(uv_offset.x), ds_mul(zoom_ds, aspect_ds));
+                    px = ds_add(px, vec2<f32>(center_hi.x, center_lo.x));
+                    var py = ds_mul(ds_set(uv_offset.y), zoom_ds);
+                    py = ds_add(py, vec2<f32>(center_hi.y, center_lo.y));
+
+                    var zx: vec2<f32>; var zy: vec2<f32>; var cx: vec2<f32>; var cy: vec2<f32>;
+
+                    if (is_julia) {
+                        zx = px; zy = py;
+                        cx = vec2<f32>(uniforms.julia_c_hi.x, uniforms.julia_c_lo.x);
+                        cy = vec2<f32>(uniforms.julia_c_hi.y, uniforms.julia_c_lo.y);
+                    } else {
+                        zx = ds_set(0.0); zy = ds_set(0.0); cx = px; cy = py;
+                    }
+
+                    var iter: u32 = 0u;
+                    const MAX_ITER: u32 = 400u;
+                    for (var i: u32 = 0u; i < MAX_ITER; i++) {
+                        let r_sq = zx.x * zx.x + zy.x * zy.x;
+                        if (r_sq > 10000.0) { break; }
+                        let r = sqrt(r_sq);
+                        let theta = atan2(zy.x, zx.x);
+                        let rd = pow(r, uniforms.exponent);
+                        let dtheta = uniforms.exponent * theta;
+                        zx = ds_add(ds_set(rd * cos(dtheta)), cx);
+                        zy = ds_add(ds_set(rd * sin(dtheta)), cy);
+                        iter++;
+                    }
+
+                    if (iter == MAX_ITER) { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }
+
+                    let dist_sq = zx.x * zx.x + zy.x * zy.x;
+                    let smooth_iter = f32(iter) + 1.0 - log2(log(dist_sq) / 2.0);
+                    var color_factor = smooth_iter * uniforms.color_speed;
+                    
+                    if (!is_julia) {
+                        let dc = vec2<f32>(px.x - uniforms.julia_c_hi.x, py.x - uniforms.julia_c_hi.y);
+                        let dist_to_c = length(dc);
+                        if (dist_to_c < 0.006 * uniforms.m_zoom) { return vec4<f32>(1.0, 1.0, 1.0, 1.0); }
+                    }
+
+                    let r = 0.5 + 0.5 * cos(3.0 + color_factor + 0.0);
+                    let g = 0.5 + 0.5 * cos(3.0 + color_factor + 0.6);
+                    let b = 0.5 + 0.5 * cos(3.0 + color_factor + 1.0);
+                    return vec4<f32>(r, g, b, 1.0);
+                }
+            `;
+
+            const shaderModule = device.createShaderModule({ code: shaderCode });
+            const pipeline = device.createRenderPipeline({
+                layout: 'auto',
+                vertex: { module: shaderModule, entryPoint: 'vs_main' },
+                fragment: { module: shaderModule, entryPoint: 'fs_main', targets: [{ format: format }] },
+                primitive: { topology: 'triangle-list' },
+            });
+
+            const bindGroup = device.createBindGroup({
+                layout: pipeline.getBindGroupLayout(0),
+                entries: [{ binding: 0, resource: { buffer: uniformBuffer } }],
+            });
+
+            // State
+            let view = {
+                m_center: { x: -0.75, y: 0.0 }, m_zoom: 2.5,
+                j_center: { x: 0.0, y: 0.0 }, j_zoom: 2.5,
+                julia_c: { x: -0.75, y: 0.1 },
+                exponent: 2.0, colorSpeed: 0.03,
+                lockJulia: false, showOrbit: true, orbitSteps: 50, mousePos: { x: 0, y: 0 }
+            };
+
+            const mZoomDisp = document.getElementById('m-zoom-display');
+            const jZoomDisp = document.getElementById('j-zoom-display');
+            const expSlider = document.getElementById('exp-slider');
+            const expVal = document.getElementById('exp-val');
+            const colorSlider = document.getElementById('color-slider');
+            const colorVal = document.getElementById('color-val');
+            const orbitSlider = document.getElementById('orbit-slider');
+            const orbitVal = document.getElementById('orbit-val');
+            const cVal = document.getElementById('c-val');
+            const lockToggle = document.getElementById('lock-julia');
+            const orbitToggle = document.getElementById('show-orbit');
+            const seedButtons = document.querySelectorAll('.seed-btn');
+
+            expSlider.addEventListener('input', (e) => { view.exponent = parseFloat(e.target.value); expVal.textContent = view.exponent.toFixed(2); render(); });
+            colorSlider.addEventListener('input', (e) => { view.colorSpeed = parseFloat(e.target.value); colorVal.textContent = view.colorSpeed.toFixed(3); render(); });
+            orbitSlider.addEventListener('input', (e) => { view.orbitSteps = parseInt(e.target.value); orbitVal.textContent = view.orbitSteps; render(); });
+            lockToggle.addEventListener('change', (e) => { view.lockJulia = e.target.checked; if (!view.lockJulia) seedButtons.forEach(btn => btn.classList.remove('active')); render(); });
+            orbitToggle.addEventListener('change', (e) => { view.showOrbit = e.target.checked; render(); });
+
+            seedButtons.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const coords = btn.getAttribute('data-c').split(',').map(Number);
+                    view.julia_c.x = coords[0]; view.julia_c.y = coords[1];
+                    view.lockJulia = true; lockToggle.checked = true;
+                    seedButtons.forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    render();
+                });
+            });
+
+            function split64(x) { const hi = Math.fround(x); const lo = x - hi; return [hi, lo]; }
+
+            function drawOrbit() {
+                ctx.clearRect(0, 0, overlay.width, overlay.height);
+                const rect = canvas.getBoundingClientRect();
+                const sideWidth = overlay.width / 2;
+                const aspect = sideWidth / overlay.height;
+
+                // Seed Dot on Mandelbrot Side
+                const seedX = ((view.julia_c.x - view.m_center.x) / (view.m_zoom * aspect) + 0.5) * sideWidth;
+                const seedY = ((view.julia_c.y - view.m_center.y) / view.m_zoom + 0.5) * overlay.height;
+                
+                if (seedX >= 0 && seedX <= sideWidth) {
+                    ctx.beginPath(); ctx.fillStyle = '#ff3366'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
+                    ctx.arc(seedX, seedY, 6, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+                    ctx.beginPath(); ctx.strokeStyle = 'rgba(255, 51, 102, 0.5)';
+                    ctx.arc(seedX, seedY, 6 + Math.sin(Date.now() / 200) * 4, 0, Math.PI * 2); ctx.stroke();
+                }
+
+                if (!view.showOrbit) return;
+
+                const nx = view.mousePos.x / rect.width;
+                const ny = view.mousePos.y / rect.height;
+                let z, c, startX, zoom, center;
+
+                if (nx < 0.5) {
+                    const local_nx = nx * 2.0;
+                    c = { x: (local_nx - 0.5) * view.m_zoom * aspect + view.m_center.x, y: (ny - 0.5) * view.m_zoom + view.m_center.y };
+                    z = { x: 0, y: 0 }; startX = 0; zoom = view.m_zoom; center = view.m_center;
+                } else {
+                    const local_nx = (nx - 0.5) * 2.0;
+                    z = { x: (local_nx - 0.5) * view.j_zoom * aspect + view.j_center.x, y: (ny - 0.5) * view.j_zoom + view.j_center.y };
+                    c = view.julia_c; startX = sideWidth; zoom = view.j_zoom; center = view.j_center;
+                }
+
+                ctx.beginPath(); ctx.strokeStyle = 'rgba(0, 255, 204, 0.7)'; ctx.lineWidth = 1.5;
+                const points = [];
+                for (let i = 0; i < view.orbitSteps; i++) {
+                    const sx = startX + ((z.x - center.x) / (zoom * aspect) + 0.5) * sideWidth;
+                    const sy = ((z.y - center.y) / zoom + 0.5) * overlay.height;
+                    if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
+                    points.push({sx, sy});
+                    const r = Math.sqrt(z.x * z.x + z.y * z.y); const theta = Math.atan2(z.y, z.x);
+                    const rd = Math.pow(r, view.exponent); const dtheta = view.exponent * theta;
+                    z = { x: rd * Math.cos(dtheta) + c.x, y: rd * Math.sin(dtheta) + c.y };
+                    if (r > 10) break; 
+                }
+                ctx.stroke();
+                points.forEach((p, i) => {
+                    ctx.beginPath(); ctx.fillStyle = i === 0 ? '#fff' : `rgba(0, 255, 204, ${1 - i/view.orbitSteps})`;
+                    ctx.arc(p.sx, p.sy, i === 0 ? 3 : 1.5, 0, Math.PI * 2); ctx.fill();
+                });
+            }
+
+            function render() {
+                canvas.width = window.innerWidth * window.devicePixelRatio;
+                canvas.height = window.innerHeight * window.devicePixelRatio;
+                overlay.width = canvas.width; overlay.height = canvas.height;
+                
+                const [mx_hi, mx_lo] = split64(view.m_center.x); const [my_hi, my_lo] = split64(view.m_center.y);
+                const [jx_hi, jx_lo] = split64(view.j_center.x); const [jy_hi, jy_lo] = split64(view.j_center.y);
+                const [cx_hi, cx_lo] = split64(view.julia_c.x); const [cy_hi, cy_lo] = split64(view.julia_c.y);
+
+                mZoomDisp.textContent = `Map Zoom: ${(2.5 / view.m_zoom).toExponential(2)}x`;
+                jZoomDisp.textContent = `Julia Zoom: ${(2.5 / view.j_zoom).toExponential(2)}x`;
+                cVal.textContent = `${view.julia_c.x.toFixed(6)}, ${view.julia_c.y.toFixed(6)}i`;
+
+                const uniformData = new Float32Array(28); 
+                uniformData[0] = canvas.width; uniformData[1] = canvas.height;
+                uniformData[2] = mx_hi; uniformData[3] = my_hi; uniformData[4] = mx_lo; uniformData[5] = my_lo;
+                uniformData[6] = jx_hi; uniformData[7] = jy_hi; uniformData[8] = jx_lo; uniformData[9] = jy_lo;
+                uniformData[10] = cx_hi; uniformData[11] = cy_hi; uniformData[12] = cx_lo; uniformData[13] = cy_lo;
+                uniformData[14] = view.m_zoom; uniformData[15] = view.j_zoom;
+                uniformData[16] = view.exponent; uniformData[17] = view.colorSpeed;
+                
+                device.queue.writeBuffer(uniformBuffer, 0, uniformData);
+
+                const commandEncoder = device.createCommandEncoder();
+                const textureView = context.getCurrentTexture().createView();
+                const passEncoder = commandEncoder.beginRenderPass({
+                    colorAttachments: [{ view: textureView, clearValue: { r: 0, g: 0, b: 0, a: 1 }, loadOp: 'clear', storeOp: 'store' }]
+                });
+                passEncoder.setPipeline(pipeline); passEncoder.setBindGroup(0, bindGroup); passEncoder.draw(6); passEncoder.end();
+                device.queue.submit([commandEncoder.finish()]);
+                drawOrbit();
+            }
+
+            let isDragging = false; let lastMouse = { x: 0, y: 0 };
+            canvas.addEventListener('mousemove', (e) => {
+                const rect = canvas.getBoundingClientRect();
+                const nx = (e.clientX - rect.left) / rect.width;
+                const ny = (e.clientY - rect.top) / rect.height;
+                view.mousePos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+                const aspect = (canvas.width * 0.5) / canvas.height;
+
+                if (nx < 0.5) {
+                    if (!view.lockJulia) {
+                        const local_nx = nx * 2.0; 
+                        view.julia_c.x = (local_nx - 0.5) * view.m_zoom * aspect + view.m_center.x;
+                        view.julia_c.y = (ny - 0.5) * view.m_zoom + view.m_center.y;
+                    }
+                    if (isDragging) {
+                        const dx = e.clientX - lastMouse.x; const dy = e.clientY - lastMouse.y;
+                        view.m_center.x -= (dx / (rect.width * 0.5)) * view.m_zoom * aspect;
+                        view.m_center.y -= (dy / rect.height) * view.m_zoom;
+                    }
+                } else if (nx >= 0.5) {
+                    if (isDragging) {
+                        const dx = e.clientX - lastMouse.x; const dy = e.clientY - lastMouse.y;
+                        view.j_center.x -= (dx / (rect.width * 0.5)) * view.j_zoom * aspect;
+                        view.j_center.y -= (dy / rect.height) * view.j_zoom;
+                    }
+                }
+                lastMouse = { x: e.clientX, y: e.clientY };
+                render();
+            });
+
+            canvas.addEventListener('wheel', (e) => {
+                e.preventDefault();
+                const rect = canvas.getBoundingClientRect();
+                const nx = (e.clientX - rect.left) / rect.width;
+                const ny = (e.clientY - rect.top) / rect.height;
+                const aspect = (canvas.width * 0.5) / canvas.height;
+                const zoomSpeed = 0.1;
+                const factor = e.deltaY > 0 ? (1 + zoomSpeed) : (1 - zoomSpeed);
+
+                if (nx < 0.5) {
+                    const local_nx = nx * 2.0;
+                    const oldZoom = view.m_zoom; view.m_zoom *= factor;
+                    view.m_center.x += (local_nx - 0.5) * (oldZoom - view.m_zoom) * aspect;
+                    view.m_center.y += (ny - 0.5) * (oldZoom - view.m_zoom);
+                } else {
+                    const local_nx = (nx - 0.5) * 2.0;
+                    const oldZoom = view.j_zoom; view.j_zoom *= factor;
+                    view.j_center.x += (local_nx - 0.5) * (oldZoom - view.j_zoom) * aspect;
+                    view.j_center.y += (ny - 0.5) * (oldZoom - view.j_zoom);
+                }
+                render();
+            }, { passive: false });
+
+            canvas.addEventListener('mousedown', (e) => { isDragging = true; lastMouse = { x: e.clientX, y: e.clientY }; });
+            window.addEventListener('mouseup', () => isDragging = false);
+
+            function animate() { drawOrbit(); requestAnimationFrame(animate); }
+            animate();
+            render();
+            window.addEventListener('resize', render);
+        }
+        initWebGPU();
+    </script>
+</body>
+</html>
