@@ -156,7 +156,7 @@ function App() {
       />
 
       {/* ═══ 5. COMPLEX PLANE ═══ */}
-      <ConceptSection id="complex" index={5} title="Complex Plane" subtitle="// THE CANVAS FOR FORMULA-BASED FRACTALS" layout="wide"
+      <ConceptSection id="complex" index={5} title="Complex Plane" subtitle="// THE CANVAS FOR FORMULA-BASED FRACTALS"
         content={<>
           <p>
             To understand formula-based fractals, we need the <strong>complex plane</strong>. A complex number has a real part and an imaginary part:
@@ -180,7 +180,7 @@ function App() {
       />
 
       {/* ═══ 6. JULIA SET ═══ */}
-      <ConceptSection id="julia" index={6} title="Julia Set" subtitle="// ONE FORMULA, INFINITE WORLDS" layout="wide"
+      <ConceptSection id="julia" index={6} title="Julia Set" subtitle="// ONE FORMULA, INFINITE WORLDS"
         content={<>
           <p>
             The Julia set uses a repeated formula. Pick a fixed constant <InlineMath math="c" />, then test many different starting values of <InlineMath math="z" /> (each pixel = one starting value):
