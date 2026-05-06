@@ -8,6 +8,7 @@ import { InlineMath, BlockMath } from 'react-katex';
 import { DeepDiveButton } from './components/DeepDive';
 import CoastlineMeasurement from './components/visualizations/CoastlineMeasurement';
 import ComplexPlaneExplorer from './components/visualizations/ComplexPlaneExplorer';
+import JuliaSetGenerator from './components/visualizations/JuliaSetGenerator';
 import KochCurve from './components/visualizations/KochCurve';
 
 function App() {
@@ -155,7 +156,7 @@ function App() {
       />
 
       {/* ═══ 5. COMPLEX PLANE ═══ */}
-      <ConceptSection id="complex" index={5} title="Complex Plane" subtitle="// THE CANVAS FOR FORMULA-BASED FRACTALS"
+      <ConceptSection id="complex" index={5} title="Complex Plane" subtitle="// THE CANVAS FOR FORMULA-BASED FRACTALS" layout="wide"
         content={<>
           <p>
             To understand formula-based fractals, we need the <strong>complex plane</strong>. A complex number has a real part and an imaginary part:
@@ -168,7 +169,10 @@ function App() {
             Each complex number becomes a point on a 2D plane. This is powerful for fractals because <span className="highlight">each pixel on screen can represent one complex number.</span> Apply a formula repeatedly to that number, observe the behavior, color the pixel accordingly. The image emerges from invisible numerical behavior.
           </p>
           <div className="callout">
-            <strong>Squaring a Complex Number:</strong> Fractals are built on the formula <InlineMath math="z = z^2 + c" />. When you square a complex number, its length from the center is squared, and its angle is doubled. <strong>Hover over the plane to map coordinates, then click to see squaring in action.</strong>
+            <strong>Squaring a Complex Number:</strong> Squaring doubles the angle and squares the modulus. <strong>Drag the blue point</strong>: inside the unit circle, <InlineMath math="z^2" /> collapses toward the origin; outside, it shoots away. The unit circle is the boundary between collapse and escape — and the dashed circle at <InlineMath math="r=2" /> is the escape radius every Julia/Mandelbrot calculation uses. Click <strong>"Keep going →"</strong> to iterate <InlineMath math="z \to z^2" /> repeatedly and see whether the orbit stays bounded or escapes.
+          </div>
+          <div className="callout" style={{ borderLeftColor: 'var(--accent-neon)', marginTop: '1rem' }}>
+            <strong>Next stage:</strong> So far you've been squaring <InlineMath math="z" /> repeatedly. In the next stage we add one more thing: <InlineMath math="z \to z^2 + c" />. That small change — adding a fixed complex number <InlineMath math="c" /> — is what creates the <strong>Julia set</strong>. Try it.
           </div>
         </>}
         viz={<ComplexPlaneExplorer />}
@@ -176,7 +180,7 @@ function App() {
       />
 
       {/* ═══ 6. JULIA SET ═══ */}
-      <ConceptSection id="julia" index={6} title="Julia Set" subtitle="// ONE FORMULA, INFINITE WORLDS"
+      <ConceptSection id="julia" index={6} title="Julia Set" subtitle="// ONE FORMULA, INFINITE WORLDS" layout="wide"
         content={<>
           <p>
             The Julia set uses a repeated formula. Pick a fixed constant <InlineMath math="c" />, then test many different starting values of <InlineMath math="z" /> (each pixel = one starting value):
@@ -191,8 +195,14 @@ function App() {
           <p>
             The fascinating part: <span className="highlight">a small change in <InlineMath math="c" /> creates a completely different Julia set.</span> One value produces a connected shape. Another produces scattered dust. Another produces spirals or branch-like structures. The constant <InlineMath math="c" /> controls the "personality" of the fractal.
           </p>
+          <div className="callout">
+            <strong>Try it below:</strong> Drag the green <InlineMath math="c" /> point (or use the sliders) — every move shifts the offset added after squaring. Drag the blue <InlineMath math="z_0" /> to pick a starting point and click <strong>Run orbit</strong> to watch its trajectory step by step. Then click <strong>Generate Julia set</strong> to test every pixel at once: bounded points form the colored set, escaping points are colored by <em>how fast</em> they leave. Hover any pixel to preview that point's orbit.
+          </div>
+          <div className="callout" style={{ borderLeftColor: 'var(--accent-neon)', marginTop: '1rem' }}>
+            <strong>Next stage:</strong> You've seen that different values of <InlineMath math="c" /> create different Julia sets — some are connected blobs, some are scattered dust. Is there a pattern to <em>which</em> <InlineMath math="c" /> values produce which kind of shape? That's the <strong>Mandelbrot set</strong>.
+          </div>
         </>}
-        viz={<Placeholder title="Julia Set Generator" type="viz" />}
+        viz={<JuliaSetGenerator />}
         quiz={<Placeholder title="Julia Set Quiz" type="quiz" />}
       />
 

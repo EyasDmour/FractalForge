@@ -176,6 +176,25 @@ a:hover { color: var(--accent-cyan); }
   min-height: 350px;
 }
 
+/*
+ * Wide layout: viz spans full container width below the content.
+ * Used for interactive stages that need horizontal room (Complex Plane, Julia, ...).
+ */
+.section-wide {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+.section-wide .section-content {
+  max-width: 900px;
+}
+.section-wide .section-viz {
+  width: 100%;
+}
+.section-wide .section-viz > * {
+  min-height: 480px;
+}
+
 /* Content typography */
 .section-content p {
   font-size: 1.15rem;

@@ -1,317 +1,409 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 
-/*
- * ComplexPlaneExplorer
- * 
- * Interactive 2D canvas showing the complex plane.
- * Hovering shows the vector and coordinate.
- * Clicking animates squaring the complex number: z -> z^2.
- * (Magnitudes square, angles double).
- */
+function sqC(x, y) { return { x: x*x - y*y, y: 2*x*y }; }
+function mag(x, y) { return Math.sqrt(x*x + y*y); }
+function getScale(w, h) { return Math.min(w, h) / (2 * BOUNDS); }
 
-// Math helpers
-function toPolar(r_part, i_part) {
-  const r = Math.sqrt(r_part * r_part + i_part * i_part);
-  const theta = Math.atan2(i_part, r_part);
-  return { r, theta };
-}
-
-function toCartesian(r, theta) {
-  return {
-    x: r * Math.cos(theta),
-    y: r * Math.sin(theta)
-  };
-}
+const BOUNDS = 3.0;
+const ESCAPE_R = 2;
+const MAX_ORBIT = 8;
 
 export default function ComplexPlaneExplorer() {
   const containerRef = useRef(null);
   const canvasRef = useRef(null);
-  const [dimensions, setDimensions] = useState({ w: 800, h: 500 });
-  
-  // Use refs for tracking to avoid restarting the rAF loop constantly
-  const mouseRef = useRef({ x: 1, y: 1 });
-  const hoverRef = useRef(false);
-  
-  // Animation state
-  // null = idle tracking mouse
-  // { start_r, start_theta, target_r, target_theta, startTime }
-  const animRef = useRef(null);
+  const [dims, setDims] = useState({ w: 800, h: 500 });
 
-  // Coordinate system configuration
-  const mathBounds = 2.5; // View from -2.5 to 2.5 on both axes
+  // Refs used by render loop (no re-render needed)
+  const zRef = useRef({ x: 0.6, y: 0.8 });
+  const orbitRef = useRef([]);
+  const dragging = useRef(false);
 
-  // Responsive sizing
+  // React state for the info panel below canvas
+  const [z, setZ] = useState({ x: 0.6, y: 0.8 });
+  const [orbitLen, setOrbitLen] = useState(0);
+  const [verdict, setVerdict] = useState(null);
+  const [isDragging, setIsDragging] = useState(false);
+
+  // Responsive canvas sizing
   useEffect(() => {
-    const observe = () => {
+    const update = () => {
       if (!containerRef.current) return;
-      const rect = containerRef.current.getBoundingClientRect();
-      const w = Math.floor(rect.width);
-      // Let it be roughly 16:10 or match height to container width
-      const h = Math.max(400, Math.min(600, Math.floor(w * 0.75)));
-      setDimensions({ w, h });
+      const r = containerRef.current.getBoundingClientRect();
+      const w = Math.floor(r.width);
+      const h = Math.max(380, Math.min(660, Math.floor(w * 0.55)));
+      setDims({ w, h });
     };
-    observe();
-    const ro = new ResizeObserver(observe);
+    update();
+    const ro = new ResizeObserver(update);
     if (containerRef.current) ro.observe(containerRef.current);
     return () => ro.disconnect();
   }, []);
 
-  // Handle mouse movement
-  const handleMouseMove = useCallback((e) => {
-    if (animRef.current) return; // Lock if animating
+  // Pointer: start drag if near z dot
+  const onPointerDown = useCallback((e) => {
     const rect = canvasRef.current.getBoundingClientRect();
-    const clientX = e.clientX - rect.left;
-    const clientY = e.clientY - rect.top;
-    
-    // Convert screen to math coordinates
-    // Center is (0,0). Screen (w/2, h/2)
-    // Scale is min(w, h) / (2 * mathBounds)
-    const scale = Math.min(dimensions.w, dimensions.h) / (2 * mathBounds);
-    const mathX = (clientX - dimensions.w / 2) / scale;
-    const mathY = -(clientY - dimensions.h / 2) / scale; // Screen Y is down
-    
-    mouseRef.current = { x: mathX, y: mathY };
-    hoverRef.current = true;
-  }, [dimensions]);
+    const sx = (e.clientX - rect.left) * (dims.w / rect.width);
+    const sy = (e.clientY - rect.top)  * (dims.h / rect.height);
+    const sc = getScale(dims.w, dims.h);
+    const zsx = dims.w/2 + zRef.current.x * sc;
+    const zsy = dims.h/2 - zRef.current.y * sc;
+    if (Math.hypot(sx - zsx, sy - zsy) < 22) {
+      dragging.current = true;
+      setIsDragging(true);
+      canvasRef.current.setPointerCapture(e.pointerId);
+    }
+  }, [dims]);
 
-  const handleMouseLeave = () => {
-    hoverRef.current = false;
-  };
+  const onPointerMove = useCallback((e) => {
+    if (!dragging.current) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const sx = (e.clientX - rect.left) * (dims.w / rect.width);
+    const sy = (e.clientY - rect.top)  * (dims.h / rect.height);
+    const sc = getScale(dims.w, dims.h);
+    const clamp = (v) => Math.max(-BOUNDS + 0.05, Math.min(BOUNDS - 0.05, v));
+    const mx = clamp((sx - dims.w/2) / sc);
+    const my = clamp(-(sy - dims.h/2) / sc);
+    zRef.current = { x: mx, y: my };
+    orbitRef.current = [];
+    setZ({ x: mx, y: my });
+    setOrbitLen(0);
+    setVerdict(null);
+  }, [dims]);
 
-  const handleClick = () => {
-    if (animRef.current) return; // Prevent multiple clicks
-    
-    const polar = toPolar(mouseRef.current.x, mouseRef.current.y);
-    const start_r = polar.r;
-    const start_theta = polar.theta;
-    
-    // z^2 math: r^2, 2*theta
-    const target_r = start_r * start_r;
-    let target_theta = start_theta * 2;
-    // Keep angle normalized nicely for animation if needed, but linear interp of angle is fine
-    
-    animRef.current = {
-      start_r,
-      start_theta,
-      target_r,
-      target_theta,
-      startTime: performance.now(),
-      duration: 1200 // ms
-    };
-  };
+  const onPointerUp = useCallback(() => {
+    dragging.current = false;
+    setIsDragging(false);
+  }, []);
 
-  // Main render loop
+  // "Keep going" adds one more squaring to the orbit
+  const onKeepGoing = useCallback(() => {
+    const orbit = orbitRef.current;
+    if (verdict || orbit.length >= MAX_ORBIT) return;
+    const last = orbit.length === 0 ? sqC(zRef.current.x, zRef.current.y) : orbit[orbit.length - 1];
+    const next = sqC(last.x, last.y);
+    const newOrbit = [...orbit, next];
+    orbitRef.current = newOrbit;
+
+    const m = mag(next.x, next.y);
+    let v = null;
+    if (m > ESCAPE_R) v = 'escaping';
+    else if (newOrbit.length >= 5) v = 'bounded';
+
+    setOrbitLen(newOrbit.length);
+    setVerdict(v);
+  }, [verdict]);
+
+  const onReset = useCallback(() => {
+    orbitRef.current = [];
+    setOrbitLen(0);
+    setVerdict(null);
+  }, []);
+
+  // Canvas render loop
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
-    
-    let animationFrameId;
+    let raf;
 
-    const render = (time) => {
-      const { w, h } = dimensions;
+    const draw = () => {
+      const { w, h } = dims;
       const dpr = window.devicePixelRatio || 1;
-      
-      if (canvas.width !== w * dpr) {
-        canvas.width = w * dpr;
+
+      // Resize canvas (also resets ctx transform)
+      if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
+        canvas.width  = w * dpr;
         canvas.height = h * dpr;
         ctx.scale(dpr, dpr);
       }
 
-      // Utils
-      const scale = Math.min(w, h) / (2 * mathBounds);
-      const toScreen = (mx, my) => {
-        return {
-          sx: w / 2 + mx * scale,
-          sy: h / 2 - my * scale
-        };
-      };
+      const sc = getScale(w, h);
+      const S  = (mx, my) => ({ sx: w/2 + mx*sc, sy: h/2 - my*sc });
+      const O  = S(0, 0);
 
-      // ── Clear ──
-      ctx.fillStyle = 'rgba(3, 7, 18, 0.95)';
+      // ── Background ──
+      ctx.fillStyle = '#030712';
       ctx.fillRect(0, 0, w, h);
 
-      // ── Draw Coordinate System ──
-      ctx.strokeStyle = 'rgba(34, 211, 238, 0.1)';
+      // ── Grid ──
+      ctx.strokeStyle = 'rgba(34,211,238,0.07)';
       ctx.lineWidth = 1;
-      
-      // Grid lines (integer bounds)
-      for (let i = -Math.floor(mathBounds); i <= Math.floor(mathBounds); i++) {
-        // Vertical
-        let p1 = toScreen(i, -mathBounds);
-        let p2 = toScreen(i, mathBounds);
-        ctx.beginPath(); ctx.moveTo(p1.sx, p1.sy); ctx.lineTo(p2.sx, p2.sy); ctx.stroke();
-        
-        // Horizontal
-        p1 = toScreen(-mathBounds, i);
-        p2 = toScreen(mathBounds, i);
-        ctx.beginPath(); ctx.moveTo(p1.sx, p1.sy); ctx.lineTo(p2.sx, p2.sy); ctx.stroke();
+      for (let i = -3; i <= 3; i++) {
+        const a = S(i, -BOUNDS), b = S(i, BOUNDS);
+        ctx.beginPath(); ctx.moveTo(a.sx, a.sy); ctx.lineTo(b.sx, b.sy); ctx.stroke();
+        const c = S(-BOUNDS, i), d = S(BOUNDS, i);
+        ctx.beginPath(); ctx.moveTo(c.sx, c.sy); ctx.lineTo(d.sx, d.sy); ctx.stroke();
       }
-      
-      // Axes
-      ctx.strokeStyle = 'rgba(34, 211, 238, 0.3)';
-      ctx.lineWidth = 2;
-      const originScreen = toScreen(0, 0);
-      
-      // Real axis
-      ctx.beginPath(); ctx.moveTo(0, originScreen.sy); ctx.lineTo(w, originScreen.sy); ctx.stroke();
-      // Imaginary axis
-      ctx.beginPath(); ctx.moveTo(originScreen.sx, 0); ctx.lineTo(originScreen.sx, h); ctx.stroke();
 
-      // Unit circle
+      // ── Axes ──
+      ctx.strokeStyle = 'rgba(34,211,238,0.22)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(0, O.sy); ctx.lineTo(w, O.sy); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(O.sx, 0); ctx.lineTo(O.sx, h); ctx.stroke();
+
+      ctx.fillStyle = 'rgba(34,211,238,0.4)';
+      ctx.font = '11px monospace';
+      ctx.fillText('Re', w - 22, O.sy - 7);
+      ctx.fillText('Im', O.sx + 6, 14);
+      for (let i = -2; i <= 2; i++) {
+        if (i === 0) continue;
+        const rp = S(i, 0), ip = S(0, i);
+        ctx.fillText(String(i), rp.sx - 4, O.sy + 13);
+        ctx.fillText(`${i}i`, O.sx + 4, ip.sy + 4);
+      }
+
+      // ── Escape circle r=2 (Interaction D) ──
       ctx.beginPath();
-      ctx.arc(originScreen.sx, originScreen.sy, scale, 0, 2 * Math.PI);
-      ctx.strokeStyle = 'rgba(192, 255, 0, 0.2)';
-      ctx.setLineDash([5, 5]);
+      ctx.arc(O.sx, O.sy, ESCAPE_R * sc, 0, 2*Math.PI);
+      ctx.strokeStyle = 'rgba(251,146,60,0.3)';
+      ctx.setLineDash([7, 5]);
+      ctx.lineWidth = 1.5;
       ctx.stroke();
-      ctx.setLineDash([]); // Reset
-      
-      // Labels
-      ctx.fillStyle = 'rgba(34, 211, 238, 0.6)';
-      ctx.font = '12px var(--font-display, monospace)';
-      ctx.fillText('Re (Real)', w - 70, originScreen.sy - 10);
-      ctx.fillText('Im (Imag)', originScreen.sx + 10, 20);
-      
-      // Draw 1 and i
-      const one = toScreen(1, 0);
-      const i_pt = toScreen(0, 1);
-      ctx.fillText('1', one.sx + 5, one.sy - 5);
-      ctx.fillText('i', i_pt.sx + 5, i_pt.sy - 5);
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(251,146,60,0.5)';
+      ctx.font = '10px monospace';
+      const escP = S(ESCAPE_R * 0.70, ESCAPE_R * 0.70);
+      ctx.fillText('r = 2', escP.sx, escP.sy - 3);
 
-      // ── Handle State Rendering ──
-      
-      let currentPolar = null;
-      let isAnimating = false;
-      let animProgress = 0;
+      // ── Unit circle (Interaction D) ──
+      ctx.beginPath();
+      ctx.arc(O.sx, O.sy, sc, 0, 2*Math.PI);
+      ctx.strokeStyle = 'rgba(192,255,0,0.28)';
+      ctx.setLineDash([5, 5]);
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(192,255,0,0.45)';
+      ctx.font = '10px monospace';
+      const unitP = S(-0.78, 0.6);
+      ctx.fillText('|z|=1', unitP.sx, unitP.sy);
 
-      if (animRef.current) {
-        // We are animating
-        isAnimating = true;
-        const elapsed = time - animRef.current.startTime;
-        let progress = elapsed / animRef.current.duration;
-        
-        if (progress > 1.2) {
-          // Animation finished + slight pause, reset
-          animRef.current = null;
-          isAnimating = false;
-        } else {
-          animProgress = Math.min(progress, 1.0);
-          
-          // Easing function (easeOutExpo)
-          const ease = animProgress === 1 ? 1 : 1 - Math.pow(2, -10 * animProgress);
-          
-          const current_r = animRef.current.start_r + (animRef.current.target_r - animRef.current.start_r) * ease;
-          const current_theta = animRef.current.start_theta + (animRef.current.target_theta - animRef.current.start_theta) * ease;
-          
-          currentPolar = { r: current_r, theta: current_theta };
-        }
-      } 
-      
-      if (!isAnimating && hoverRef.current) {
-        // Idle tracking
-        currentPolar = toPolar(mouseRef.current.x, mouseRef.current.y);
+      // ── Current z and z² ──
+      const z  = zRef.current;
+      const zq = sqC(z.x, z.y);
+      const zS  = S(z.x, z.y);
+      const zqS = S(zq.x, zq.y);
+      const zm  = mag(z.x, z.y);
+
+      // Modulus circle for z (Interaction A)
+      if (zm > 0.05) {
+        ctx.beginPath();
+        ctx.arc(O.sx, O.sy, zm * sc, 0, 2*Math.PI);
+        ctx.strokeStyle = 'rgba(56,189,248,0.15)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
       }
 
-      // Draw active vector
-      if (currentPolar) {
-        const cart = toCartesian(currentPolar.r, currentPolar.theta);
-        const screenPt = toScreen(cart.x, cart.y);
+      // ── Orbit trail (Interaction C) ──
+      const orbit = orbitRef.current;
+      if (orbit.length > 0) {
+        const pts = [zq, ...orbit];
+        for (let i = 0; i < pts.length - 1; i++) {
+          const a = Math.max(0, 0.7 - i * 0.1);
+          const p1 = S(pts[i].x, pts[i].y);
+          const p2 = S(pts[i+1].x, pts[i+1].y);
+          ctx.beginPath();
+          ctx.moveTo(p1.sx, p1.sy);
+          ctx.lineTo(p2.sx, p2.sy);
+          ctx.strokeStyle = `rgba(251,146,60,${a})`;
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        }
+        for (let i = 0; i < orbit.length; i++) {
+          const a = Math.max(0.1, 0.85 - i * 0.13);
+          const r = Math.max(2.5, 5.5 - i * 0.6);
+          const ps = S(orbit[i].x, orbit[i].y);
+          ctx.beginPath();
+          ctx.arc(ps.sx, ps.sy, r, 0, 2*Math.PI);
+          ctx.fillStyle = `rgba(251,146,60,${a})`;
+          ctx.fill();
+        }
+      }
 
-        // Vector line
+      // ── Dashed line z → z² (Interaction B) ──
+      ctx.beginPath();
+      ctx.moveTo(zS.sx, zS.sy);
+      ctx.lineTo(zqS.sx, zqS.sy);
+      ctx.strokeStyle = 'rgba(148,163,184,0.4)';
+      ctx.setLineDash([4, 4]);
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // ── Angle wedge at origin (Interaction B) ──
+      if (zm > 0.05) {
+        const theta  = Math.atan2(z.y, z.x); // math angle (CCW)
+        const theta2 = 2 * theta;             // angle doubles — use raw, not atan2(z²)
+        const r1 = 28, r2 = 42;
+
+        // z arc (blue): screen angle 0 → -theta, CCW in screen if theta > 0
         ctx.beginPath();
-        ctx.moveTo(originScreen.sx, originScreen.sy);
-        ctx.lineTo(screenPt.sx, screenPt.sy);
-        ctx.strokeStyle = isAnimating ? 'var(--accent-neon, #c0ff00)' : 'var(--accent-cyan, #22d3ee)';
+        ctx.arc(O.sx, O.sy, r1, 0, -theta, theta > 0);
+        ctx.strokeStyle = 'rgba(56,189,248,0.75)';
         ctx.lineWidth = 2;
         ctx.stroke();
 
-        // Point head
+        // z² arc (orange): screen angle 0 → -theta2
         ctx.beginPath();
-        ctx.arc(screenPt.sx, screenPt.sy, 5, 0, Math.PI * 2);
-        ctx.fillStyle = isAnimating ? 'var(--accent-neon, #c0ff00)' : 'var(--accent-cyan, #22d3ee)';
-        ctx.fill();
+        ctx.arc(O.sx, O.sy, r2, 0, -theta2, theta2 > 0);
+        ctx.strokeStyle = 'rgba(251,146,60,0.75)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
 
-        // If animating, draw the original starting point as a ghost
-        if (isAnimating && animRef.current) {
-          const startCart = toCartesian(animRef.current.start_r, animRef.current.start_theta);
-          const startScreen = toScreen(startCart.x, startCart.y);
-          
-          ctx.beginPath();
-          ctx.moveTo(originScreen.sx, originScreen.sy);
-          ctx.lineTo(startScreen.sx, startScreen.sy);
-          ctx.strokeStyle = 'rgba(34, 211, 238, 0.4)';
-          ctx.lineWidth = 1;
-          ctx.stroke();
+        // Angle labels
+        ctx.font = '9px monospace';
+        ctx.fillStyle = 'rgba(56,189,248,0.7)';
+        const t1mid = theta / 2;
+        ctx.fillText('θ', O.sx + (r1+7)*Math.cos(-t1mid) - 3, O.sy + (r1+7)*Math.sin(-t1mid) + 3);
 
-          ctx.beginPath();
-          ctx.arc(startScreen.sx, startScreen.sy, 3, 0, Math.PI * 2);
-          ctx.fillStyle = 'rgba(34, 211, 238, 0.4)';
-          ctx.fill();
-
-          // Draw arc representing the angle doubling
-          ctx.beginPath();
-          ctx.arc(originScreen.sx, originScreen.sy, 30, -animRef.current.start_theta, -currentPolar.theta, animRef.current.target_theta > animRef.current.start_theta);
-          ctx.strokeStyle = 'rgba(192, 255, 0, 0.5)';
-          ctx.stroke();
-        }
-
-        // Display coordinate readout box
-        const readX = 20;
-        const readY = h - 60;
-        ctx.fillStyle = 'rgba(3, 7, 18, 0.8)';
-        ctx.fillRect(readX, readY, 200, 40);
-        ctx.strokeStyle = isAnimating ? 'var(--accent-neon, #c0ff00)' : 'var(--accent-cyan, #22d3ee)';
-        ctx.strokeRect(readX, readY, 200, 40);
-
-        ctx.fillStyle = 'var(--text-main, #f0f4f8)';
-        ctx.font = '14px var(--font-display, monospace)';
-        
-        const sign = cart.y >= 0 ? '+' : '-';
-        const text = `z = ${cart.x.toFixed(2)} ${sign} ${Math.abs(cart.y).toFixed(2)}i`;
-        ctx.fillText(text, readX + 15, readY + 25);
+        ctx.fillStyle = 'rgba(251,146,60,0.7)';
+        const t2mid = theta2 / 2;
+        ctx.fillText('2θ', O.sx + (r2+8)*Math.cos(-t2mid) - 6, O.sy + (r2+8)*Math.sin(-t2mid) + 3);
       }
 
-      // Draw instructions
-      if (!isAnimating && !hoverRef.current) {
-        ctx.fillStyle = 'var(--text-dim, #94a3b8)';
-        ctx.font = '14px var(--font-display, monospace)';
+      // ── z² dot (orange) (Interaction B) ──
+      ctx.beginPath();
+      ctx.arc(zqS.sx, zqS.sy, 6.5, 0, 2*Math.PI);
+      ctx.fillStyle = '#fb923c';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.fillStyle = '#fb923c';
+      ctx.font = 'bold 12px monospace';
+      ctx.fillText('z²', zqS.sx + 9, zqS.sy - 7);
+
+      // ── z dot (blue, draggable) (Interaction A) ──
+      ctx.beginPath();
+      ctx.arc(zS.sx, zS.sy, 9, 0, 2*Math.PI);
+      ctx.fillStyle = '#38bdf8';
+      ctx.fill();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.fillStyle = '#38bdf8';
+      ctx.font = 'bold 13px monospace';
+      ctx.fillText('z', zS.sx + 11, zS.sy - 7);
+
+      // Drag hint
+      if (!dragging.current) {
+        ctx.fillStyle = 'rgba(148,163,184,0.4)';
+        ctx.font = '11px monospace';
         ctx.textAlign = 'center';
-        ctx.fillText('HOVER TO EXPLORE', w / 2, h - 30);
-        ctx.textAlign = 'left'; // reset
-      } else if (!isAnimating && hoverRef.current) {
-        ctx.fillStyle = 'var(--accent-neon, #c0ff00)';
-        ctx.font = '14px var(--font-display, monospace)';
-        ctx.textAlign = 'center';
-        ctx.fillText('CLICK TO SQUARE ( z → z² )', w / 2, h - 30);
+        ctx.fillText('drag', zS.sx, zS.sy + 23);
         ctx.textAlign = 'left';
       }
 
-      animationFrameId = requestAnimationFrame(render);
+      raf = requestAnimationFrame(draw);
     };
 
-    animationFrameId = requestAnimationFrame(render);
+    raf = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(raf);
+  }, [dims]);
 
-    return () => cancelAnimationFrame(animationFrameId);
-  }, [dimensions]);
+  // Info panel values (from React state z, stays in sync with zRef via setZ)
+  const zq   = sqC(z.x, z.y);
+  const zm   = mag(z.x, z.y);
+  const zqm  = mag(zq.x, zq.y);
+
+  const fmt = (x, y) => {
+    const s = y < 0 ? '−' : '+';
+    return `${x.toFixed(3)} ${s} ${Math.abs(y).toFixed(3)}i`;
+  };
+
+  const canKeepGoing = !verdict && orbitLen < MAX_ORBIT;
 
   return (
-    <div 
-      ref={containerRef} 
-      style={{ 
-        width: '100%', 
-        border: '2px solid var(--accent-cyan)',
-        position: 'relative',
-        cursor: animRef.current ? 'wait' : 'crosshair',
-        background: 'rgba(3, 7, 18, 0.9)'
-      }}
+    <div
+      ref={containerRef}
+      style={{ width: '100%', background: 'rgba(3,7,18,0.95)', border: '2px solid var(--accent-cyan)' }}
     >
       <canvas
         ref={canvasRef}
-        onMouseMove={handleMouseMove}
-        onMouseLeave={handleMouseLeave}
-        onClick={handleClick}
-        style={{ display: 'block', width: '100%' }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        style={{
+          display: 'block',
+          width: '100%',
+          cursor: isDragging ? 'grabbing' : 'grab',
+          touchAction: 'none'
+        }}
       />
+
+      {/* ── Info panel ── */}
+      <div style={{
+        padding: '0.8rem 1.1rem',
+        borderTop: '1px solid rgba(34,211,238,0.18)',
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: '0.75rem 1.5rem',
+        alignItems: 'center',
+        background: 'rgba(3,7,18,0.7)'
+      }}>
+        {/* Coordinates */}
+        <div style={{ fontFamily: 'monospace', fontSize: '12.5px', lineHeight: 1.75, color: 'var(--text-main)', flexGrow: 1, minWidth: '220px' }}>
+          <div>
+            <span style={{ color: '#38bdf8', fontWeight: 'bold' }}>z</span>
+            {' = '}{fmt(z.x, z.y)}
+            <span style={{ color: 'rgba(148,163,184,0.75)', marginLeft: '0.75rem' }}>|z| = {zm.toFixed(3)}</span>
+          </div>
+          <div>
+            <span style={{ color: '#fb923c', fontWeight: 'bold' }}>z²</span>
+            {' = '}{fmt(zq.x, zq.y)}
+            <span style={{ color: 'rgba(148,163,184,0.75)', marginLeft: '0.75rem' }}>|z²| = {zqm.toFixed(3)}</span>
+          </div>
+        </div>
+
+        {/* Buttons */}
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexShrink: 0 }}>
+          <button
+            onClick={onKeepGoing}
+            disabled={!canKeepGoing}
+            style={{
+              background: 'transparent',
+              border: '2px solid var(--accent-neon, #c0ff00)',
+              color: 'var(--accent-neon, #c0ff00)',
+              fontFamily: 'monospace',
+              fontSize: '12px',
+              padding: '0.35rem 0.75rem',
+              cursor: canKeepGoing ? 'pointer' : 'default',
+              opacity: canKeepGoing ? 1 : 0.3,
+              transition: 'opacity 0.2s'
+            }}
+          >
+            Keep going →
+          </button>
+          <button
+            onClick={onReset}
+            style={{
+              background: 'transparent',
+              border: '2px solid rgba(34,211,238,0.35)',
+              color: 'rgba(34,211,238,0.6)',
+              fontFamily: 'monospace',
+              fontSize: '12px',
+              padding: '0.35rem 0.75rem',
+              cursor: 'pointer'
+            }}
+          >
+            Reset
+          </button>
+        </div>
+
+        {/* Verdict */}
+        {verdict && (
+          <div style={{
+            fontFamily: 'monospace',
+            fontSize: '13px',
+            fontWeight: 'bold',
+            color: verdict === 'bounded' ? '#4ade80' : '#f87171',
+            padding: '0.2rem 0.6rem',
+            border: `1px solid ${verdict === 'bounded' ? 'rgba(74,222,128,0.3)' : 'rgba(248,113,113,0.3)'}`,
+          }}>
+            {verdict === 'bounded' ? '✓ This point stays bounded' : '⚠ This point escapes to infinity'}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
