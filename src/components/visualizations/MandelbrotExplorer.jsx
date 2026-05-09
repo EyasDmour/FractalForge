@@ -3,27 +3,23 @@ import { InlineMath } from 'react-katex';
 import { useVisible } from '../../hooks/useVisible';
 
 // ─── Constants ───
-const BOUNDS = 1.7;
+const BOUNDS = 2.0;
 const ESCAPE_R_SQ = 4;
 const PALETTE_SIZE = 512;
 const MAX_ORBIT = 150;
-const HOVER_MAX = 150;
-
-const JULIA_STATIC_LONG = 1400;
-const JULIA_LIVE_LONG   = 500;
-const ITER_STATIC_BASE  = 128;
-const ITER_LIVE         = 72;
-
+const ITER_STATIC_BASE = 128;
+const JULIA_LIVE_LONG = 500;
+const ITER_LIVE = 72;
 const DEBOUNCE_MS = 220;
 const SCALE_MIN = 0.5;
 const SCALE_MAX = 1e6;
+const ORBIT_LIVE_STEPS = 150;
 
-// ─── Helpers ───
 function pxPerUnit(w, h, view) {
   return (Math.min(w, h) / 2) * view.scale / BOUNDS;
 }
 
-// ─── CPU Palette ───
+// ─── CPU Palette (identical to Julia) ───
 const palette = (() => {
   const stops = [
     [0.00, [3,   7,   18 ]],
@@ -56,22 +52,22 @@ const palette = (() => {
 })();
 const SET_COLOR = (255 << 24) | (24 << 16) | (8 << 8) | 4;
 
-// ─── CPU Julia renderer ───
-function renderJulia(imgData, w, h, view, cx, cy, maxIter) {
+// ─── CPU Mandelbrot renderer ───
+function renderMandelbrot(imgData, w, h, view, maxIter) {
   const data = new Uint32Array(imgData.data.buffer);
   const ppu = pxPerUnit(w, h, view);
   const halfW = w / 2, halfH = h / 2;
   const log2 = Math.LN2;
   for (let py = 0; py < h; py++) {
-    const my = view.cy - (py - halfH) / ppu;
+    const cIm = view.cy - (py - halfH) / ppu;
     for (let px = 0; px < w; px++) {
-      const mx = view.cx + (px - halfW) / ppu;
-      let x = mx, y = my, i = 0, escaped = false;
+      const cRe = view.cx + (px - halfW) / ppu;
+      let x = 0, y = 0, i = 0, escaped = false;
       while (i < maxIter) {
         const x2 = x * x, y2 = y * y;
         if (x2 + y2 > ESCAPE_R_SQ) { escaped = true; break; }
-        const ny = 2 * x * y + cy;
-        x = x2 - y2 + cx;
+        const ny = 2 * x * y + cIm;
+        x = x2 - y2 + cRe;
         y = ny;
         i++;
       }
@@ -89,9 +85,10 @@ function renderJulia(imgData, w, h, view, cx, cy, maxIter) {
   }
 }
 
-function computeOrbit(zx, zy, cx, cy, maxIter) {
-  const pts = [{ x: zx, y: zy }];
-  let x = zx, y = zy;
+// Orbit always starts from z₀ = 0
+function computeOrbit(cx, cy, maxIter) {
+  const pts = [{ x: 0, y: 0 }];
+  let x = 0, y = 0;
   for (let i = 1; i <= maxIter; i++) {
     const x2 = x * x, y2 = y * y;
     if (x2 + y2 > ESCAPE_R_SQ) return { pts, escaped: true, escapedAt: i - 1 };
@@ -110,8 +107,6 @@ struct Uniforms {
   resolution : vec2f,
   center     : vec2f,
   scale      : f32,
-  c_re       : f32,
-  c_im       : f32,
   max_iter   : f32,
 }
 @group(0) @binding(0) var<uniform> u : Uniforms;
@@ -149,12 +144,12 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
 
 @fragment
 fn fs_main(@builtin(position) frag: vec4f) -> @location(0) vec4f {
-  let ppu = min(u.resolution.x, u.resolution.y) * 0.5 * u.scale / ${BOUNDS};
-  let mx  = u.center.x + (frag.x - u.resolution.x * 0.5) / ppu;
-  let my  = u.center.y - (frag.y - u.resolution.y * 0.5) / ppu;
+  let ppu  = min(u.resolution.x, u.resolution.y) * 0.5 * u.scale / ${BOUNDS};
+  let c_re = u.center.x + (frag.x - u.resolution.x * 0.5) / ppu;
+  let c_im = u.center.y - (frag.y - u.resolution.y * 0.5) / ppu;
 
-  var zx = mx;
-  var zy = my;
+  var zx = 0.0;
+  var zy = 0.0;
   let max_i = u32(u.max_iter);
   var i = 0u;
   loop {
@@ -162,8 +157,8 @@ fn fs_main(@builtin(position) frag: vec4f) -> @location(0) vec4f {
     let x2 = zx * zx;
     let y2 = zy * zy;
     if x2 + y2 > 4.0 { break; }
-    let nzy = 2.0 * zx * zy + u.c_im;
-    zx = x2 - y2 + u.c_re;
+    let nzy = 2.0 * zx * zy + c_im;
+    zx = x2 - y2 + c_re;
     zy = nzy;
     i++;
   }
@@ -186,19 +181,15 @@ async function initWebGPU() {
     const adapter = await navigator.gpu.requestAdapter();
     if (!adapter) return null;
     const device = await adapter.requestDevice();
-
     const gpuCanvas = document.createElement('canvas');
     const gpuCtx = gpuCanvas.getContext('webgpu');
     if (!gpuCtx) return null;
-
     const format = navigator.gpu.getPreferredCanvasFormat();
     gpuCtx.configure({ device, format, alphaMode: 'opaque' });
-
     const uniformBuffer = device.createBuffer({
-      size: 32,
+      size: 24,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
-
     const shaderModule = device.createShaderModule({ code: WGSL_SOURCE });
     const pipeline = device.createRenderPipeline({
       layout: 'auto',
@@ -206,19 +197,17 @@ async function initWebGPU() {
       fragment: { module: shaderModule, entryPoint: 'fs_main', targets: [{ format }] },
       primitive: { topology: 'triangle-list' },
     });
-
     const bindGroup = device.createBindGroup({
       layout: pipeline.getBindGroupLayout(0),
       entries: [{ binding: 0, resource: { buffer: uniformBuffer } }],
     });
-
     return { device, pipeline, uniformBuffer, bindGroup, gpuCanvas, gpuCtx };
   } catch {
     return null;
   }
 }
 
-function gpuRender(gpu, view, c, w, h, dpr) {
+function gpuRender(gpu, view, w, h, dpr) {
   const { device, pipeline, uniformBuffer, bindGroup, gpuCanvas, gpuCtx } = gpu;
   const pw = Math.floor(w * dpr);
   const ph = Math.floor(h * dpr);
@@ -230,7 +219,7 @@ function gpuRender(gpu, view, c, w, h, dpr) {
   const maxIter = Math.min(800, Math.round(ITER_STATIC_BASE + 60 * zoomBoost));
   device.queue.writeBuffer(
     uniformBuffer, 0,
-    new Float32Array([pw, ph, view.cx, view.cy, view.scale, c.x, c.y, maxIter]),
+    new Float32Array([pw, ph, view.cx, view.cy, view.scale, maxIter]),
   );
   const encoder = device.createCommandEncoder();
   const pass = encoder.beginRenderPass({
@@ -250,52 +239,46 @@ function gpuRender(gpu, view, c, w, h, dpr) {
 
 // ─── Presets ───
 const PRESETS = [
-  { name: 'classic swirl',  c: [-0.40,    0.60   ] },
-  { name: 'dendrite',       c: [-0.7269,  0.1889 ] },
-  { name: 'spiral islands', c: [ 0.285,   0.01   ] },
-  { name: 'connected blob', c: [-0.80,    0.156  ] },
-  { name: 'douady rabbit',  c: [-0.123,   0.745  ] },
-  { name: 'san marco',      c: [-0.75,    0.0    ] },
+  { name: 'cardioid center',  c: [-0.25,   0.0   ] },
+  { name: 'period-2 bulb',    c: [-1.0,    0.0   ] },
+  { name: 'period-3 bulb',    c: [-0.125,  0.744 ] },
+  { name: 'antenna tip',      c: [-2.0,    0.0   ] },
+  { name: 'seahorse valley',  c: [-0.745,  0.113 ] },
+  { name: 'elephant valley',  c: [ 0.275,  0.0   ] },
 ];
 
 // ─── Component ───────────────────────────────────────────────────────────────
-export default function JuliaSetGenerator({ externalC } = {}) {
+export default function MandelbrotExplorer({ onCChange } = {}) {
   const [containerRef, visible] = useVisible();
-  const canvasRef    = useRef(null);
-  const offscreenRef = useRef(null);
-  const gpuRef       = useRef(null);
+  const canvasRef     = useRef(null);
+  const offscreenRef  = useRef(null);
+  const gpuRef        = useRef(null);
 
-  const z0Ref          = useRef({ x: 0.0, y: 0.0 });
-  const cRef           = useRef({ x: -0.4, y: 0.6 });
-  const orbitRef       = useRef([]);
-  const hoverOrbitRef  = useRef(null);
-  const draggingRef    = useRef(null);
-  const setRenderedRef = useRef(false);
-  const viewRef        = useRef({ cx: 0, cy: 0, scale: 1 });
+  const viewRef         = useRef({ cx: -0.75, cy: 0, scale: 1 });
+  const cRef            = useRef({ x: -0.5, y: 0 });
+  const orbitRef        = useRef([]);
+  const hoverOrbitRef   = useRef(null);
+  const draggingRef     = useRef(null);
+  const animTimerRef    = useRef(null);
   const renderedViewRef = useRef(null);
-  const panStartRef    = useRef(null);
-
-  const liveScheduledRef  = useRef(false);
+  const panStartRef     = useRef(null);
   const staticDebounceRef = useRef(null);
-  const animTimerRef      = useRef(null);
+  const setRenderedRef  = useRef(false);
+  const hoverOrbitOnRef = useRef(false);
 
-  const [dims, setDims]                   = useState({ w: 1100, h: 640 });
-  const [z0UI, setZ0UI]                   = useState({ x: 0.0, y: 0.0 });
-  const [cUI, setCUI]                     = useState({ x: -0.4, y: 0.6 });
-  const [setRendered, setSetRendered]     = useState(false);
+  const [dims, setDims]               = useState({ w: 1100, h: 640 });
+  const [cUI, setCUI]                 = useState({ x: -0.5, y: 0 });
+  const [gpuActive, setGpuActive]     = useState(false);
+  const [setRendered, setSetRendered] = useState(false);
   const [pendingRender, setPendingRender] = useState(false);
-  const [verdict, setVerdict]             = useState(null);
-  const [orbitCount, setOrbitCount]       = useState(0);
-  const [running, setRunning]             = useState(false);
-  const [speed, setSpeed]                 = useState('normal');
-  const [isDragging, setIsDragging]       = useState(false);
-  const [hoverInfo, setHoverInfo]         = useState(null);
-  const [zoomLevel, setZoomLevel]         = useState(1);
-  const [gpuActive, setGpuActive]         = useState(false);
-
-  const hoverOrbitOnRef = useRef(true); // hover orbit on by default
-  const [hoverOrbitOn, _setHoverOrbitOn] = useState(true);
-  const setHoverOrbitOn = (v) => { hoverOrbitOnRef.current = v; _setHoverOrbitOn(v); if (!v) { hoverOrbitRef.current = null; setHoverInfo(null); } };
+  const [verdict, setVerdict]         = useState(null);
+  const [orbitCount, setOrbitCount]   = useState(0);
+  const [running, setRunning]         = useState(false);
+  const [speed, setSpeed]             = useState('normal');
+  const [isDragging, setIsDragging]   = useState(false);
+  const [zoomLevel, setZoomLevel]     = useState(1);
+  const [hoverOrbitOn, _setHoverOrbitOn] = useState(false);
+  const setHoverOrbitOn = (v) => { hoverOrbitOnRef.current = v; _setHoverOrbitOn(v); if (!v) hoverOrbitRef.current = null; };
 
   // CPU offscreen canvas
   useEffect(() => { offscreenRef.current = document.createElement('canvas'); }, []);
@@ -309,12 +292,7 @@ export default function JuliaSetGenerator({ externalC } = {}) {
       setSetRendered(true);
       setGpuActive(true);
     });
-    return () => {
-      if (gpuRef.current) {
-        gpuRef.current.device.destroy();
-        gpuRef.current = null;
-      }
-    };
+    return () => { if (gpuRef.current) { gpuRef.current.device.destroy(); gpuRef.current = null; } };
   }, []);
 
   // Cleanup timers
@@ -323,14 +301,13 @@ export default function JuliaSetGenerator({ externalC } = {}) {
     if (staticDebounceRef.current) clearTimeout(staticDebounceRef.current);
   }, []);
 
-  // Sync externally-controlled c (Grand Connection)
+  // Compute initial orbit for the default c
   useEffect(() => {
-    if (!externalC) return;
-    cRef.current = externalC;
-    setCUI(externalC);
-    if (gpuRef.current) return; // GPU renders continuously
-    renderJuliaSet(externalC.x, externalC.y, 'static');
-  }, [externalC]); // eslint-disable-line react-hooks/exhaustive-deps
+    const o = computeOrbit(cRef.current.x, cRef.current.y, ORBIT_LIVE_STEPS);
+    orbitRef.current = o.pts;
+    setOrbitCount(o.pts.length);
+    setVerdict(o.escaped ? { escapedAt: o.escapedAt } : 'bounded');
+  }, []);
 
   // Responsive sizing
   useEffect(() => {
@@ -368,7 +345,7 @@ export default function JuliaSetGenerator({ externalC } = {}) {
   }, [dims]);
 
   // ── CPU render (fallback) ──
-  const renderJuliaSet = useCallback((cx, cy, mode) => {
+  const renderMandelbrotSet = useCallback((mode) => {
     const aspect = dims.h / dims.w;
     let renderW, renderH, maxIter;
     if (mode === 'live') {
@@ -376,8 +353,8 @@ export default function JuliaSetGenerator({ externalC } = {}) {
       renderH = Math.max(40, Math.round(JULIA_LIVE_LONG * aspect));
       maxIter = ITER_LIVE;
     } else {
-      renderW = JULIA_STATIC_LONG;
-      renderH = Math.max(80, Math.round(JULIA_STATIC_LONG * aspect));
+      renderW = 1400;
+      renderH = Math.max(80, Math.round(1400 * aspect));
       const zoomBoost = Math.max(0, Math.log2(viewRef.current.scale));
       maxIter = Math.min(800, Math.round(ITER_STATIC_BASE + 60 * zoomBoost));
     }
@@ -387,7 +364,7 @@ export default function JuliaSetGenerator({ externalC } = {}) {
     off.height = renderH;
     const ofctx = off.getContext('2d');
     const id = ofctx.createImageData(renderW, renderH);
-    renderJulia(id, renderW, renderH, viewRef.current, cx, cy, maxIter);
+    renderMandelbrot(id, renderW, renderH, viewRef.current, maxIter);
     ofctx.putImageData(id, 0, 0);
     renderedViewRef.current = {
       cx: viewRef.current.cx, cy: viewRef.current.cy,
@@ -398,23 +375,14 @@ export default function JuliaSetGenerator({ externalC } = {}) {
     if (mode === 'static') setPendingRender(false);
   }, [dims]);
 
-  const scheduleLiveRender = useCallback(() => {
-    if (liveScheduledRef.current) return;
-    liveScheduledRef.current = true;
-    requestAnimationFrame(() => {
-      liveScheduledRef.current = false;
-      renderJuliaSet(cRef.current.x, cRef.current.y, 'live');
-    });
-  }, [renderJuliaSet]);
-
   const scheduleStaticRender = useCallback(() => {
     setPendingRender(true);
     if (staticDebounceRef.current) clearTimeout(staticDebounceRef.current);
     staticDebounceRef.current = setTimeout(() => {
       staticDebounceRef.current = null;
-      renderJuliaSet(cRef.current.x, cRef.current.y, 'static');
+      renderMandelbrotSet('static');
     }, DEBOUNCE_MS);
-  }, [renderJuliaSet]);
+  }, [renderMandelbrotSet]);
 
   const clearOrbit = useCallback(() => {
     if (animTimerRef.current) { clearTimeout(animTimerRef.current); animTimerRef.current = null; }
@@ -427,14 +395,10 @@ export default function JuliaSetGenerator({ externalC } = {}) {
   // ── Pointer handlers ──
   const onPointerDown = useCallback((e) => {
     const { sx, sy } = eventToMath(e);
-    const z0s = mathToScreen(z0Ref.current.x, z0Ref.current.y);
-    const cs  = mathToScreen(cRef.current.x,  cRef.current.y);
-    const dz = Math.hypot(sx - z0s.sx, sy - z0s.sy);
-    const dc = Math.hypot(sx - cs.sx,  sy - cs.sy);
-    if (Math.min(dz, dc) <= 22) {
-      const target = (dz <= dc) ? 'z0' : 'c';
-      if (target === 'c' && externalC) { draggingRef.current = 'pan'; panStartRef.current = { sx, sy, viewCx: viewRef.current.cx, viewCy: viewRef.current.cy }; }
-      else draggingRef.current = target;
+    const cs = mathToScreen(cRef.current.x, cRef.current.y);
+    const dc = Math.hypot(sx - cs.sx, sy - cs.sy);
+    if (dc <= 22) {
+      draggingRef.current = 'c';
     } else {
       draggingRef.current = 'pan';
       panStartRef.current = { sx, sy, viewCx: viewRef.current.cx, viewCy: viewRef.current.cy };
@@ -446,16 +410,13 @@ export default function JuliaSetGenerator({ externalC } = {}) {
   const onPointerMove = useCallback((e) => {
     const { mx, my, sx, sy } = eventToMath(e);
 
-    if (!draggingRef.current && setRenderedRef.current && hoverOrbitOnRef.current) {
-      const o = computeOrbit(mx, my, cRef.current.x, cRef.current.y, HOVER_MAX);
-      hoverOrbitRef.current = o;
-      setHoverInfo({ escaped: o.escaped, n: o.escaped ? o.escapedAt : HOVER_MAX });
-    } else if (!draggingRef.current && (!setRenderedRef.current || !hoverOrbitOnRef.current)) {
-      hoverOrbitRef.current = null;
-      setHoverInfo(null);
+    if (!draggingRef.current) {
+      if (hoverOrbitOnRef.current) {
+        const o = computeOrbit(mx, my, 80);
+        hoverOrbitRef.current = o;
+      }
+      return;
     }
-
-    if (!draggingRef.current) return;
 
     if (draggingRef.current === 'pan') {
       const ps = panStartRef.current;
@@ -469,37 +430,30 @@ export default function JuliaSetGenerator({ externalC } = {}) {
       return;
     }
 
-    const halfB = BOUNDS / viewRef.current.scale;
-    const clampX = (v) => Math.max(viewRef.current.cx - halfB + 0.02 * halfB, Math.min(viewRef.current.cx + halfB - 0.02 * halfB, v));
-    const clampY = (v) => Math.max(viewRef.current.cy - halfB + 0.02 * halfB, Math.min(viewRef.current.cy + halfB - 0.02 * halfB, v));
-    const px = { x: clampX(mx), y: clampY(my) };
-
-    if (draggingRef.current === 'z0') {
-      z0Ref.current = px;
-      setZ0UI(px);
-      clearOrbit();
-    } else {
-      cRef.current = px;
-      setCUI(px);
-      clearOrbit();
-      if (!gpuRef.current && setRenderedRef.current) {
-        scheduleLiveRender();
-        scheduleStaticRender();
-      }
-    }
-  }, [eventToMath, dims, scheduleLiveRender, scheduleStaticRender, clearOrbit]);
+    // Drag c
+    const newC = { x: mx, y: my };
+    cRef.current = newC;
+    setCUI(newC);
+    onCChange?.(newC);
+    const o = computeOrbit(newC.x, newC.y, ORBIT_LIVE_STEPS);
+    orbitRef.current = o.pts;
+    setOrbitCount(o.pts.length);
+    setVerdict(o.escaped ? { escapedAt: o.escapedAt } : 'bounded');
+    setRunning(false);
+    if (animTimerRef.current) { clearTimeout(animTimerRef.current); animTimerRef.current = null; }
+  }, [eventToMath, dims, scheduleStaticRender, onCChange]);
 
   const onPointerUp = useCallback(() => {
     const which = draggingRef.current;
     draggingRef.current = null;
     setIsDragging(false);
-    if (!gpuRef.current && (which === 'c' || which === 'pan') && setRenderedRef.current) {
+    if (!gpuRef.current && which === 'pan' && setRenderedRef.current) {
       if (staticDebounceRef.current) { clearTimeout(staticDebounceRef.current); staticDebounceRef.current = null; }
-      requestAnimationFrame(() => renderJuliaSet(cRef.current.x, cRef.current.y, 'static'));
+      requestAnimationFrame(() => renderMandelbrotSet('static'));
     }
-  }, [renderJuliaSet]);
+  }, [renderMandelbrotSet]);
 
-  const onPointerLeave = useCallback(() => { hoverOrbitRef.current = null; setHoverInfo(null); }, []);
+  const onPointerLeave = useCallback(() => { hoverOrbitRef.current = null; }, []);
 
   // ── Wheel zoom ──
   useEffect(() => {
@@ -531,27 +485,26 @@ export default function JuliaSetGenerator({ externalC } = {}) {
 
   // ── Buttons ──
   const onResetView = useCallback(() => {
-    viewRef.current = { cx: 0, cy: 0, scale: 1 };
+    viewRef.current = { cx: -0.75, cy: 0, scale: 1 };
     setZoomLevel(1);
-    if (!gpuRef.current && setRenderedRef.current) renderJuliaSet(cRef.current.x, cRef.current.y, 'static');
-  }, [renderJuliaSet]);
+    if (!gpuRef.current && setRenderedRef.current) renderMandelbrotSet('static');
+  }, [renderMandelbrotSet]);
 
   const onRunOrbit = useCallback(() => {
     clearOrbit();
-    const z0 = z0Ref.current;
-    const c  = cRef.current;
+    const c = cRef.current;
     if (speed === 'instant') {
-      const o = computeOrbit(z0.x, z0.y, c.x, c.y, MAX_ORBIT);
+      const o = computeOrbit(c.x, c.y, MAX_ORBIT);
       orbitRef.current = o.pts;
       setOrbitCount(o.pts.length);
       setVerdict(o.escaped ? { escapedAt: o.escapedAt } : 'bounded');
       return;
     }
     setRunning(true);
-    orbitRef.current = [{ x: z0.x, y: z0.y }];
+    orbitRef.current = [{ x: 0, y: 0 }];
     setOrbitCount(1);
     const stepDelay = speed === 'slow' ? 250 : 80;
-    let step_i = 0, zx = z0.x, zy = z0.y;
+    let zx = 0, zy = 0, step_i = 0;
     const step = () => {
       step_i++;
       if (step_i > MAX_ORBIT) { animTimerRef.current = null; setRunning(false); setVerdict('bounded'); return; }
@@ -570,21 +523,14 @@ export default function JuliaSetGenerator({ externalC } = {}) {
     const newC = { x: preset.c[0], y: preset.c[1] };
     cRef.current = newC;
     setCUI(newC);
-    clearOrbit();
-    if (!gpuRef.current && setRenderedRef.current) renderJuliaSet(newC.x, newC.y, 'static');
-  }, [renderJuliaSet, clearOrbit]);
-
-  const onSliderChange = useCallback((axis, e) => {
-    const v = parseFloat(e.target.value);
-    const newC = axis === 'x' ? { x: v, y: cRef.current.y } : { x: cRef.current.x, y: v };
-    cRef.current = newC;
-    setCUI(newC);
-    clearOrbit();
-    if (!gpuRef.current && setRenderedRef.current) {
-      scheduleLiveRender();
-      scheduleStaticRender();
-    }
-  }, [scheduleLiveRender, scheduleStaticRender, clearOrbit]);
+    onCChange?.(newC);
+    if (animTimerRef.current) { clearTimeout(animTimerRef.current); animTimerRef.current = null; }
+    setRunning(false);
+    const o = computeOrbit(newC.x, newC.y, ORBIT_LIVE_STEPS);
+    orbitRef.current = o.pts;
+    setOrbitCount(o.pts.length);
+    setVerdict(o.escaped ? { escapedAt: o.escapedAt } : 'bounded');
+  }, [onCChange]);
 
   // ── Main rAF draw loop ──
   useEffect(() => {
@@ -614,13 +560,11 @@ export default function JuliaSetGenerator({ externalC } = {}) {
       ctx.fillStyle = '#030712';
       ctx.fillRect(0, 0, w, h);
 
-      // ── Julia set blit ──
+      // ── Mandelbrot blit ──
       if (gpuRef.current) {
-        // GPU path: render current frame directly, blit to display
-        gpuRender(gpuRef.current, v, cRef.current, w, h, dpr);
+        gpuRender(gpuRef.current, v, w, h, dpr);
         ctx.drawImage(gpuRef.current.gpuCanvas, 0, 0, w, h);
       } else if (setRenderedRef.current && offscreenRef.current && renderedViewRef.current) {
-        // CPU fallback: transform-hold blit from cached offscreen
         const rv = renderedViewRef.current;
         const ppuR = (Math.min(rv.dimsW, rv.dimsH) / 2) * rv.scale / BOUNDS;
         const halfBxR = (rv.dimsW / 2) / ppuR;
@@ -632,10 +576,10 @@ export default function JuliaSetGenerator({ externalC } = {}) {
         ctx.drawImage(offscreenRef.current, tl.sx, tl.sy, br.sx - tl.sx, br.sy - tl.sy);
       }
 
-      const onJulia = setRenderedRef.current || !!gpuRef.current;
+      const hasSet = setRenderedRef.current || !!gpuRef.current;
 
       // Grid
-      ctx.strokeStyle = onJulia ? 'rgba(255,255,255,0.05)' : 'rgba(34,211,238,0.07)';
+      ctx.strokeStyle = hasSet ? 'rgba(255,255,255,0.04)' : 'rgba(34,211,238,0.07)';
       ctx.lineWidth = 1;
       const halfB = BOUNDS / v.scale;
       for (let i = Math.ceil(v.cx - halfB); i <= Math.floor(v.cx + halfB); i++) {
@@ -649,21 +593,69 @@ export default function JuliaSetGenerator({ externalC } = {}) {
 
       // Axes
       if (O.sx >= 0 && O.sx <= w) {
-        ctx.strokeStyle = onJulia ? 'rgba(255,255,255,0.13)' : 'rgba(34,211,238,0.22)';
+        ctx.strokeStyle = hasSet ? 'rgba(255,255,255,0.1)' : 'rgba(34,211,238,0.22)';
         ctx.lineWidth = 1.2;
         ctx.beginPath(); ctx.moveTo(O.sx, 0); ctx.lineTo(O.sx, h); ctx.stroke();
       }
       if (O.sy >= 0 && O.sy <= h) {
-        ctx.strokeStyle = onJulia ? 'rgba(255,255,255,0.13)' : 'rgba(34,211,238,0.22)';
+        ctx.strokeStyle = hasSet ? 'rgba(255,255,255,0.1)' : 'rgba(34,211,238,0.22)';
         ctx.lineWidth = 1.2;
         ctx.beginPath(); ctx.moveTo(0, O.sy); ctx.lineTo(w, O.sy); ctx.stroke();
       }
 
+      // Region labels (only when zoomed out)
+      if (v.scale < 2.5) {
+        ctx.font = '11px monospace';
+        ctx.fillStyle = 'rgba(255,255,255,0.3)';
+        const cardioidS = S(0.0, 0.3);
+        ctx.fillText('cardioid', cardioidS.sx - 30, cardioidS.sy);
+        const p2S = S(-1.0, 0.35);
+        ctx.fillText('period-2', p2S.sx - 27, p2S.sy);
+      }
+
+      // Orbit
+      const orbit = orbitRef.current;
+      if (orbit.length > 1) {
+        ctx.beginPath();
+        for (let i = 0; i < orbit.length; i++) {
+          const p = S(orbit[i].x, orbit[i].y);
+          if (i === 0) ctx.moveTo(p.sx, p.sy); else ctx.lineTo(p.sx, p.sy);
+        }
+        ctx.strokeStyle = 'rgba(56,189,248,0.7)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        for (let i = 0; i < orbit.length; i++) {
+          const p = S(orbit[i].x, orbit[i].y);
+          const isHead = i === orbit.length - 1;
+          const isOrigin = i === 0;
+          ctx.beginPath();
+          ctx.arc(p.sx, p.sy, isHead ? 5.5 : isOrigin ? 4.5 : 2.5, 0, 2 * Math.PI);
+          if (isOrigin) {
+            ctx.fillStyle = 'rgba(255,255,255,0.9)';
+          } else {
+            ctx.fillStyle = isHead ? '#22d3ee' : `rgba(56,189,248,${0.3 + 0.6 * (i / orbit.length)})`;
+          }
+          ctx.fill();
+          if (isHead || isOrigin) {
+            ctx.strokeStyle = '#000';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+          }
+        }
+        // z₀ = 0 label
+        const originS = S(0, 0);
+        if (originS.sx >= 0 && originS.sx <= w && originS.sy >= 0 && originS.sy <= h) {
+          ctx.fillStyle = 'rgba(255,255,255,0.75)';
+          ctx.font = 'bold 11px monospace';
+          ctx.fillText('z₀=0', originS.sx + 8, originS.sy - 6);
+        }
+      }
+
       // Hover orbit
-      if (hoverOrbitRef.current && !draggingRef.current && onJulia) {
+      if (hoverOrbitRef.current && !draggingRef.current) {
         const ho = hoverOrbitRef.current;
         if (ho.pts.length > 1) {
-          ctx.strokeStyle = ho.escaped ? 'rgba(255,200,200,0.55)' : 'rgba(220,255,200,0.55)';
+          ctx.strokeStyle = ho.escaped ? 'rgba(248,113,113,0.4)' : 'rgba(74,222,128,0.4)';
           ctx.lineWidth = 1;
           ctx.beginPath();
           for (let i = 0; i < ho.pts.length; i++) {
@@ -672,51 +664,22 @@ export default function JuliaSetGenerator({ externalC } = {}) {
           }
           ctx.stroke();
         }
-        if (ho.pts.length > 0) {
-          const p0 = S(ho.pts[0].x, ho.pts[0].y);
-          ctx.beginPath(); ctx.arc(p0.sx, p0.sy, 3.5, 0, 2 * Math.PI);
-          ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.fill();
-        }
       }
 
-      // Active orbit
-      const orbit = orbitRef.current;
-      if (orbit.length > 1) {
-        ctx.beginPath();
-        for (let i = 0; i < orbit.length; i++) {
-          const p = S(orbit[i].x, orbit[i].y);
-          if (i === 0) ctx.moveTo(p.sx, p.sy); else ctx.lineTo(p.sx, p.sy);
-        }
-        ctx.strokeStyle = 'rgba(56,189,248,0.85)'; ctx.lineWidth = 2; ctx.stroke();
-        for (let i = 0; i < orbit.length; i++) {
-          const p = S(orbit[i].x, orbit[i].y);
-          const isHead = i === orbit.length - 1;
-          ctx.beginPath(); ctx.arc(p.sx, p.sy, isHead ? 5.5 : 3, 0, 2 * Math.PI);
-          ctx.fillStyle = isHead ? '#22d3ee' : `rgba(56,189,248,${0.4 + 0.5 * (1 - i / orbit.length)})`;
-          ctx.fill();
-          if (isHead) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke(); }
-        }
-      }
-
-      // c dot
+      // c marker
       const c = cRef.current;
       const cs = S(c.x, c.y);
-      ctx.beginPath(); ctx.arc(cs.sx, cs.sy, 9, 0, 2 * Math.PI);
-      ctx.fillStyle = '#4ade80'; ctx.fill();
-      ctx.strokeStyle = '#000'; ctx.lineWidth = 2.5; ctx.stroke();
-      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.stroke();
-      ctx.fillStyle = '#4ade80'; ctx.font = 'bold 13px monospace';
+      ctx.beginPath();
+      ctx.arc(cs.sx, cs.sy, 9, 0, 2 * Math.PI);
+      ctx.fillStyle = '#4ade80';
+      ctx.fill();
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 2.5; ctx.stroke();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1; ctx.stroke();
+      ctx.fillStyle = '#4ade80';
+      ctx.font = 'bold 13px monospace';
       ctx.fillText('c', cs.sx + 12, cs.sy - 8);
-
-      // z₀ dot
-      const z0 = z0Ref.current;
-      const z0s = S(z0.x, z0.y);
-      ctx.beginPath(); ctx.arc(z0s.sx, z0s.sy, 9, 0, 2 * Math.PI);
-      ctx.fillStyle = '#38bdf8'; ctx.fill();
-      ctx.strokeStyle = '#000'; ctx.lineWidth = 2.5; ctx.stroke();
-      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.stroke();
-      ctx.fillStyle = '#38bdf8'; ctx.font = 'bold 13px monospace';
-      ctx.fillText('z₀', z0s.sx + 12, z0s.sy - 8);
 
       raf = requestAnimationFrame(draw);
     };
@@ -724,27 +687,25 @@ export default function JuliaSetGenerator({ externalC } = {}) {
     return () => cancelAnimationFrame(raf);
   }, [dims, visible]);
 
-  // CPU auto-render on resize (GPU path: rAF loop handles it)
+  // CPU auto-render on resize
   useEffect(() => {
     if (gpuRef.current) return;
-    renderJuliaSet(cRef.current.x, cRef.current.y, 'static');
-  }, [dims, renderJuliaSet]);
+    renderMandelbrotSet('static');
+  }, [dims, renderMandelbrotSet]);
 
   // ── UI ──
   const fmt = (x, y) => {
     const s = y < 0 ? '−' : '+';
-    return `${x.toFixed(3)} ${s} ${Math.abs(y).toFixed(3)}i`;
+    return `${x.toFixed(4)} ${s} ${Math.abs(y).toFixed(4)}i`;
   };
-  const z0sqPlusC = {
-    x: z0UI.x * z0UI.x - z0UI.y * z0UI.y + cUI.x,
-    y: 2 * z0UI.x * z0UI.y + cUI.y,
-  };
+
   const btn = (color, disabled) => ({
     background: 'transparent', border: `2px solid ${color}`, color,
     fontFamily: 'monospace', fontSize: '12px', padding: '0.4rem 0.85rem',
     cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.35 : 1,
     transition: 'opacity 0.15s', whiteSpace: 'nowrap',
   });
+
   const cursor = isDragging ? 'grabbing' : 'crosshair';
 
   return (
@@ -757,16 +718,15 @@ export default function JuliaSetGenerator({ externalC } = {}) {
         background: 'rgba(3,7,18,0.7)',
       }}>
         <span style={{ color: 'rgba(148,163,184,0.7)', letterSpacing: '0.05em' }}>FORMULA</span>
-        <span style={{ fontSize: '15px' }}><InlineMath math="z_{n+1} = z_n^2 + c" /></span>
+        <span style={{ fontSize: '15px' }}><InlineMath math="z_{n+1} = z_n^2 + c \quad (z_0 = 0)" /></span>
         {gpuActive && (
           <span style={{ fontSize: '10px', color: '#c0ff00', border: '1px solid rgba(192,255,0,0.5)', padding: '1px 6px', letterSpacing: '0.05em' }}>
             WebGPU
           </span>
         )}
         <span style={{ color: 'rgba(148,163,184,0.55)', marginLeft: 'auto', fontSize: '11px' }}>
-          drag <span style={{ color: '#38bdf8' }}>z₀</span> &amp; <span style={{ color: '#4ade80' }}>c</span>
+          drag <span style={{ color: '#4ade80' }}>c</span> to see its orbit
           {' · scroll to zoom · drag empty area to pan'}
-          {(setRendered || gpuActive) && <> · hover for orbit preview</>}
         </span>
       </div>
 
@@ -785,42 +745,30 @@ export default function JuliaSetGenerator({ externalC } = {}) {
         padding: '0.85rem 1.1rem', borderTop: '1px solid rgba(34,211,238,0.18)',
         display: 'flex', flexDirection: 'column', gap: '0.7rem', background: 'rgba(3,7,18,0.7)',
       }}>
-        {/* Readouts */}
+        {/* c readout */}
         <div style={{ fontFamily: 'monospace', fontSize: '12px', lineHeight: 1.7, color: 'var(--text-main)', display: 'flex', flexWrap: 'wrap', gap: '0 2.5rem' }}>
-          <div><span style={{ color: '#38bdf8', fontWeight: 'bold' }}>z₀</span>{' = '}{fmt(z0UI.x, z0UI.y)}</div>
           <div><span style={{ color: '#4ade80', fontWeight: 'bold' }}>c</span>{' = '}{fmt(cUI.x, cUI.y)}</div>
-          <div><span style={{ color: '#fb923c', fontWeight: 'bold' }}>z₀² + c</span>{' = '}{fmt(z0sqPlusC.x, z0sqPlusC.y)}</div>
+          <div style={{ color: 'var(--text-dim)', fontSize: '11px', alignSelf: 'center' }}>
+            orbit starts at <span style={{ color: 'rgba(255,255,255,0.8)' }}>z₀ = 0</span>
+          </div>
         </div>
 
-        {/* Sliders — hidden when c is controlled externally */}
-        {!externalC && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem 2rem', alignItems: 'center', fontFamily: 'monospace', fontSize: '11.5px' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'rgba(148,163,184,0.85)' }}>
-              <span>Re(c)</span>
-              <input type="range" min="-1.5" max="1.5" step="0.001" value={cUI.x}
-                onChange={(e) => onSliderChange('x', e)}
-                style={{ width: '180px', accentColor: '#4ade80' }} />
-              <span style={{ color: '#4ade80', minWidth: '60px' }}>{cUI.x.toFixed(3)}</span>
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'rgba(148,163,184,0.85)' }}>
-              <span>Im(c)</span>
-              <input type="range" min="-1.5" max="1.5" step="0.001" value={cUI.y}
-                onChange={(e) => onSliderChange('y', e)}
-                style={{ width: '180px', accentColor: '#4ade80' }} />
-              <span style={{ color: '#4ade80', minWidth: '60px' }}>{cUI.y.toFixed(3)}</span>
-            </label>
-          </div>
-        )}
         {/* Buttons */}
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
           <button onClick={onRunOrbit} disabled={running} style={btn('#22d3ee', running)}>
-            {running ? 'running…' : 'Run orbit'}
+            {running ? 'running…' : 'Animate orbit'}
           </button>
           <button onClick={clearOrbit} style={btn('rgba(34,211,238,0.55)', false)}>Reset orbit</button>
           <button
+            onClick={() => setHoverOrbitOn(!hoverOrbitOn)}
+            style={{ ...btn(hoverOrbitOn ? '#c0ff00' : 'rgba(148,163,184,0.5)', false), background: hoverOrbitOn ? 'rgba(192,255,0,0.08)' : 'transparent', border: `1px solid ${hoverOrbitOn ? '#c0ff00' : 'rgba(148,163,184,0.35)'}`, fontSize: '11px', padding: '0.25rem 0.65rem' }}
+          >
+            hover orbit
+          </button>
+          <button
             onClick={onResetView}
-            disabled={zoomLevel === 1 && viewRef.current.cx === 0 && viewRef.current.cy === 0}
-            style={btn('rgba(192,255,0,0.7)', zoomLevel === 1 && viewRef.current.cx === 0 && viewRef.current.cy === 0)}
+            disabled={zoomLevel === 1 && viewRef.current.cx === -0.75 && viewRef.current.cy === 0}
+            style={btn('rgba(192,255,0,0.7)', zoomLevel === 1 && viewRef.current.cx === -0.75 && viewRef.current.cy === 0)}
           >
             Reset view
           </button>
@@ -845,13 +793,6 @@ export default function JuliaSetGenerator({ externalC } = {}) {
             </select>
           </label>
 
-          <button
-            onClick={() => setHoverOrbitOn(!hoverOrbitOn)}
-            style={{ background: hoverOrbitOn ? 'rgba(192,255,0,0.08)' : 'transparent', border: `1px solid ${hoverOrbitOn ? '#c0ff00' : 'rgba(148,163,184,0.35)'}`, color: hoverOrbitOn ? '#c0ff00' : 'rgba(148,163,184,0.7)', fontFamily: 'monospace', fontSize: '11px', padding: '0.25rem 0.65rem', cursor: 'pointer', transition: 'all 0.15s', whiteSpace: 'nowrap' }}
-          >
-            hover orbit
-          </button>
-
           <span style={{ marginLeft: 'auto', fontFamily: 'monospace', fontSize: '11.5px', color: 'rgba(148,163,184,0.7)' }}>
             zoom: <span style={{ color: '#c0ff00' }}>{zoomLevel < 10 ? zoomLevel.toFixed(2) : zoomLevel.toFixed(0)}×</span>
           </span>
@@ -865,18 +806,17 @@ export default function JuliaSetGenerator({ externalC } = {}) {
             </span>
           )}
           {verdict === 'bounded' && (
-            <span style={{ color: '#4ade80', fontWeight: 'bold', padding: '0.2rem 0.55rem', border: '1px solid rgba(74,222,128,0.35)' }}>✓ bounded</span>
+            <span style={{ color: '#4ade80', fontWeight: 'bold', padding: '0.2rem 0.55rem', border: '1px solid rgba(74,222,128,0.35)' }}>
+              ✓ bounded — c is in the Mandelbrot set
+            </span>
           )}
           {verdict && typeof verdict === 'object' && (
-            <span style={{ color: '#f87171', fontWeight: 'bold', padding: '0.2rem 0.55rem', border: '1px solid rgba(248,113,113,0.35)' }}>⚠ escaped at step {verdict.escapedAt}</span>
+            <span style={{ color: '#f87171', fontWeight: 'bold', padding: '0.2rem 0.55rem', border: '1px solid rgba(248,113,113,0.35)' }}>
+              ⚠ escaped at step {verdict.escapedAt} — c is outside the set
+            </span>
           )}
           {!gpuActive && setRendered && pendingRender && (
             <span style={{ color: 'rgba(192,255,0,0.65)', fontSize: '11px' }}>⚡ sharpening…</span>
-          )}
-          {hoverInfo && (setRendered || gpuActive) && !isDragging && (
-            <span style={{ color: 'rgba(255,255,255,0.55)', fontSize: '11px', marginLeft: 'auto' }}>
-              hover orbit: {hoverInfo.escaped ? `escapes @ ${hoverInfo.n}` : 'bounded'}
-            </span>
           )}
         </div>
       </div>

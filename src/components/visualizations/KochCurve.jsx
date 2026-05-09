@@ -1,4 +1,5 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
+import { useVisible } from '../../hooks/useVisible';
 
 // Math helpers
 function getLineSegment(w, h) {
@@ -62,7 +63,7 @@ function lerpPoint(A, B, t) {
 }
 
 export default function KochCurve() {
-  const containerRef = useRef(null);
+  const [containerRef, visible] = useVisible();
   const canvasRef = useRef(null);
   const [dimensions, setDimensions] = useState({ w: 800, h: 500 });
   const [iteration, setIteration] = useState(0);
@@ -128,6 +129,7 @@ export default function KochCurve() {
 
   // Render loop
   useEffect(() => {
+    if (!visible) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
@@ -306,7 +308,7 @@ export default function KochCurve() {
     animationFrameId = requestAnimationFrame(render);
 
     return () => cancelAnimationFrame(animationFrameId);
-  }, [dimensions, thickness, isSequential]);
+  }, [dimensions, thickness, isSequential, visible]);
 
   return (
     <div 

@@ -1,30 +1,83 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
+import { useVisible } from '../../hooks/useVisible';
 
-function sqC(x, y) { return { x: x*x - y*y, y: 2*x*y }; }
+function sqC(x, y)   { return { x: x*x - y*y, y: 2*x*y }; }
+function cubeC(x, y) { const q = sqC(x, y); return { x: q.x*x - q.y*y, y: q.x*y + q.y*x }; }
+function divC(ax, ay, bx, by) {
+  const d = bx*bx + by*by;
+  if (d < 1e-10) return { x: 1e9, y: 1e9 };
+  return { x: (ax*bx + ay*by)/d, y: (ay*bx - ax*by)/d };
+}
+function newtonZ3(x, y) {
+  // N(z) = (2z³+1)/(3z²)
+  const cu = cubeC(x, y);
+  const sq = sqC(x, y);
+  return divC(2*cu.x + 1, 2*cu.y, 3*sq.x, 3*sq.y);
+}
 function mag(x, y) { return Math.sqrt(x*x + y*y); }
 function getScale(w, h) { return Math.min(w, h) / (2 * BOUNDS); }
 
 const BOUNDS = 3.0;
-const ESCAPE_R = 2;
-const MAX_ORBIT = 8;
+
+const NEWTON_ROOTS = [
+  { x: 1,    y: 0,               color: '#4ade80', label: 'Root 1' },
+  { x: -0.5, y:  Math.sqrt(3)/2, color: '#f472b6', label: 'Root 2' },
+  { x: -0.5, y: -Math.sqrt(3)/2, color: '#fb923c', label: 'Root 3' },
+];
+
+const FORMULAS = {
+  sq:     { id: 'sq',     name: 'z²',           nextLabel: 'z²',   maxOrbit: 100, angleMult: 2,    escapeR: 2 },
+  cube:   { id: 'cube',   name: 'z³',           nextLabel: 'z³',   maxOrbit: 100, angleMult: 3,    escapeR: 2 },
+  newton: { id: 'newton', name: 'Newton (z³−1)', nextLabel: 'N(z)', maxOrbit: 50,  angleMult: null, escapeR: null },
+};
+
+function applyFormula(id, x, y) {
+  if (id === 'sq')     return sqC(x, y);
+  if (id === 'cube')   return cubeC(x, y);
+  if (id === 'newton') return newtonZ3(x, y);
+}
+
+function computeVerdict(id, orbit, zn) {
+  if (id === 'sq' || id === 'cube') {
+    if (mag(zn.x, zn.y) > 2) return { type: 'escaped' };
+    if (orbit.length >= 5) return { type: 'bounded' };
+    return null;
+  }
+  if (id === 'newton') {
+    for (let i = 0; i < NEWTON_ROOTS.length; i++) {
+      const r = NEWTON_ROOTS[i];
+      if (mag(zn.x - r.x, zn.y - r.y) < 0.005) return { type: 'root', rootIdx: i };
+    }
+    if (mag(zn.x, zn.y) > 1e6) return { type: 'escaped' };
+    if (orbit.length >= 30) return { type: 'stuck' };
+    return null;
+  }
+}
 
 export default function ComplexPlaneExplorer() {
-  const containerRef = useRef(null);
-  const canvasRef = useRef(null);
+  const [containerRef, visible] = useVisible();
+  const canvasRef    = useRef(null);
   const [dims, setDims] = useState({ w: 800, h: 500 });
 
-  // Refs used by render loop (no re-render needed)
-  const zRef = useRef({ x: 0.6, y: 0.8 });
-  const orbitRef = useRef([]);
-  const dragging = useRef(false);
+  const zRef       = useRef({ x: 0.6, y: 0.8 });
+  const orbitRef   = useRef([]);
+  const dragging   = useRef(false);
+  const formulaRef = useRef('sq');
 
-  // React state for the info panel below canvas
-  const [z, setZ] = useState({ x: 0.6, y: 0.8 });
+  const [z, setZ]           = useState({ x: 0.6, y: 0.8 });
+  const [formula, _setFormula] = useState('sq');
   const [orbitLen, setOrbitLen] = useState(0);
-  const [verdict, setVerdict] = useState(null);
+  const [verdict, setVerdict]   = useState(null);
   const [isDragging, setIsDragging] = useState(false);
 
-  // Responsive canvas sizing
+  const setFormula = useCallback((id) => {
+    formulaRef.current = id;
+    _setFormula(id);
+    orbitRef.current = [];
+    setOrbitLen(0);
+    setVerdict(null);
+  }, []);
+
   useEffect(() => {
     const update = () => {
       if (!containerRef.current) return;
@@ -39,7 +92,6 @@ export default function ComplexPlaneExplorer() {
     return () => ro.disconnect();
   }, []);
 
-  // Pointer: start drag if near z dot
   const onPointerDown = useCallback((e) => {
     const rect = canvasRef.current.getBoundingClientRect();
     const sx = (e.clientX - rect.left) * (dims.w / rect.width);
@@ -75,21 +127,22 @@ export default function ComplexPlaneExplorer() {
     setIsDragging(false);
   }, []);
 
-  // "Keep going" adds one more squaring to the orbit
   const onKeepGoing = useCallback(() => {
-    const orbit = orbitRef.current;
-    if (verdict || orbit.length >= MAX_ORBIT) return;
-    const last = orbit.length === 0 ? sqC(zRef.current.x, zRef.current.y) : orbit[orbit.length - 1];
-    const next = sqC(last.x, last.y);
-    const newOrbit = [...orbit, next];
-    orbitRef.current = newOrbit;
-
-    const m = mag(next.x, next.y);
+    const fid = formulaRef.current;
+    const fDef = FORMULAS[fid];
+    let orbit = [...orbitRef.current];
     let v = null;
-    if (m > ESCAPE_R) v = 'escaping';
-    else if (newOrbit.length >= 5) v = 'bounded';
-
-    setOrbitLen(newOrbit.length);
+    if (verdict || orbit.length >= fDef.maxOrbit) return;
+    while (!v && orbit.length < fDef.maxOrbit) {
+      const prev = orbit.length === 0
+        ? applyFormula(fid, zRef.current.x, zRef.current.y)
+        : orbit[orbit.length - 1];
+      const next = applyFormula(fid, prev.x, prev.y);
+      orbit.push(next);
+      v = computeVerdict(fid, orbit, next);
+    }
+    orbitRef.current = orbit;
+    setOrbitLen(orbit.length);
     setVerdict(v);
   }, [verdict]);
 
@@ -101,6 +154,7 @@ export default function ComplexPlaneExplorer() {
 
   // Canvas render loop
   useEffect(() => {
+    if (!visible) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
@@ -110,7 +164,6 @@ export default function ComplexPlaneExplorer() {
       const { w, h } = dims;
       const dpr = window.devicePixelRatio || 1;
 
-      // Resize canvas (also resets ctx transform)
       if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
         canvas.width  = w * dpr;
         canvas.height = h * dpr;
@@ -120,6 +173,8 @@ export default function ComplexPlaneExplorer() {
       const sc = getScale(w, h);
       const S  = (mx, my) => ({ sx: w/2 + mx*sc, sy: h/2 - my*sc });
       const O  = S(0, 0);
+      const fid = formulaRef.current;
+      const fDef = FORMULAS[fid];
 
       // ── Background ──
       ctx.fillStyle = '#030712';
@@ -152,20 +207,22 @@ export default function ComplexPlaneExplorer() {
         ctx.fillText(`${i}i`, O.sx + 4, ip.sy + 4);
       }
 
-      // ── Escape circle r=2 (Interaction D) ──
-      ctx.beginPath();
-      ctx.arc(O.sx, O.sy, ESCAPE_R * sc, 0, 2*Math.PI);
-      ctx.strokeStyle = 'rgba(251,146,60,0.3)';
-      ctx.setLineDash([7, 5]);
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.fillStyle = 'rgba(251,146,60,0.5)';
-      ctx.font = '10px monospace';
-      const escP = S(ESCAPE_R * 0.70, ESCAPE_R * 0.70);
-      ctx.fillText('r = 2', escP.sx, escP.sy - 3);
+      // ── Escape circle (sq/cube only) ──
+      if (fDef.escapeR) {
+        ctx.beginPath();
+        ctx.arc(O.sx, O.sy, fDef.escapeR * sc, 0, 2*Math.PI);
+        ctx.strokeStyle = 'rgba(251,146,60,0.3)';
+        ctx.setLineDash([7, 5]);
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = 'rgba(251,146,60,0.5)';
+        ctx.font = '10px monospace';
+        const escP = S(fDef.escapeR * 0.70, fDef.escapeR * 0.70);
+        ctx.fillText('r = 2', escP.sx, escP.sy - 3);
+      }
 
-      // ── Unit circle (Interaction D) ──
+      // ── Unit circle ──
       ctx.beginPath();
       ctx.arc(O.sx, O.sy, sc, 0, 2*Math.PI);
       ctx.strokeStyle = 'rgba(192,255,0,0.28)';
@@ -175,17 +232,33 @@ export default function ComplexPlaneExplorer() {
       ctx.setLineDash([]);
       ctx.fillStyle = 'rgba(192,255,0,0.45)';
       ctx.font = '10px monospace';
-      const unitP = S(-0.78, 0.6);
-      ctx.fillText('|z|=1', unitP.sx, unitP.sy);
+      ctx.fillText('|z|=1', S(-0.78, 0.6).sx, S(-0.78, 0.6).sy);
 
-      // ── Current z and z² ──
-      const z  = zRef.current;
-      const zq = sqC(z.x, z.y);
-      const zS  = S(z.x, z.y);
-      const zqS = S(zq.x, zq.y);
-      const zm  = mag(z.x, z.y);
+      // ── Newton roots (newton only) ──
+      if (fid === 'newton') {
+        for (const r of NEWTON_ROOTS) {
+          const rs = S(r.x, r.y);
+          ctx.beginPath();
+          ctx.arc(rs.sx, rs.sy, 7, 0, 2*Math.PI);
+          ctx.fillStyle = r.color;
+          ctx.fill();
+          ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+          ctx.fillStyle = r.color;
+          ctx.font = '10px monospace';
+          ctx.fillText(r.label, rs.sx + 10, rs.sy + 4);
+        }
+      }
 
-      // Modulus circle for z (Interaction A)
+      // ── Current z and f(z) ──
+      const zv  = zRef.current;
+      const fz  = applyFormula(fid, zv.x, zv.y);
+      const zS  = S(zv.x, zv.y);
+      const fzS = S(fz.x, fz.y);
+      const zm  = mag(zv.x, zv.y);
+
+      // Modulus circle for z
       if (zm > 0.05) {
         ctx.beginPath();
         ctx.arc(O.sx, O.sy, zm * sc, 0, 2*Math.PI);
@@ -194,76 +267,71 @@ export default function ComplexPlaneExplorer() {
         ctx.stroke();
       }
 
-      // ── Orbit trail (Interaction C) ──
+      // ── Orbit trail ──
       const orbit = orbitRef.current;
       if (orbit.length > 0) {
-        const pts = [zq, ...orbit];
+        const pts = [fz, ...orbit];
+        ctx.strokeStyle = 'rgba(251,146,60,0.55)';
+        ctx.lineWidth = 1.5;
         for (let i = 0; i < pts.length - 1; i++) {
-          const a = Math.max(0, 0.7 - i * 0.1);
           const p1 = S(pts[i].x, pts[i].y);
           const p2 = S(pts[i+1].x, pts[i+1].y);
           ctx.beginPath();
           ctx.moveTo(p1.sx, p1.sy);
           ctx.lineTo(p2.sx, p2.sy);
-          ctx.strokeStyle = `rgba(251,146,60,${a})`;
-          ctx.lineWidth = 1.5;
           ctx.stroke();
         }
+        ctx.fillStyle = 'rgba(251,146,60,0.8)';
         for (let i = 0; i < orbit.length; i++) {
-          const a = Math.max(0.1, 0.85 - i * 0.13);
-          const r = Math.max(2.5, 5.5 - i * 0.6);
           const ps = S(orbit[i].x, orbit[i].y);
           ctx.beginPath();
-          ctx.arc(ps.sx, ps.sy, r, 0, 2*Math.PI);
-          ctx.fillStyle = `rgba(251,146,60,${a})`;
+          ctx.arc(ps.sx, ps.sy, 4, 0, 2*Math.PI);
           ctx.fill();
         }
       }
 
-      // ── Dashed line z → z² (Interaction B) ──
+      // ── Dashed line z → f(z) ──
       ctx.beginPath();
       ctx.moveTo(zS.sx, zS.sy);
-      ctx.lineTo(zqS.sx, zqS.sy);
+      ctx.lineTo(fzS.sx, fzS.sy);
       ctx.strokeStyle = 'rgba(148,163,184,0.4)';
       ctx.setLineDash([4, 4]);
       ctx.lineWidth = 1;
       ctx.stroke();
       ctx.setLineDash([]);
 
-      // ── Angle wedge at origin (Interaction B) ──
-      if (zm > 0.05) {
-        const theta  = Math.atan2(z.y, z.x); // math angle (CCW)
-        const theta2 = 2 * theta;             // angle doubles — use raw, not atan2(z²)
+      // ── Angle arcs (sq / cube only) ──
+      if (fDef.angleMult && zm > 0.05) {
+        const theta  = Math.atan2(zv.y, zv.x);
+        const thetaN = fDef.angleMult * theta;
         const r1 = 28, r2 = 42;
 
-        // z arc (blue): screen angle 0 → -theta, CCW in screen if theta > 0
         ctx.beginPath();
         ctx.arc(O.sx, O.sy, r1, 0, -theta, theta > 0);
         ctx.strokeStyle = 'rgba(56,189,248,0.75)';
         ctx.lineWidth = 2;
         ctx.stroke();
 
-        // z² arc (orange): screen angle 0 → -theta2
         ctx.beginPath();
-        ctx.arc(O.sx, O.sy, r2, 0, -theta2, theta2 > 0);
+        ctx.arc(O.sx, O.sy, r2, 0, -thetaN, thetaN > 0);
         ctx.strokeStyle = 'rgba(251,146,60,0.75)';
         ctx.lineWidth = 2;
         ctx.stroke();
 
-        // Angle labels
         ctx.font = '9px monospace';
         ctx.fillStyle = 'rgba(56,189,248,0.7)';
         const t1mid = theta / 2;
         ctx.fillText('θ', O.sx + (r1+7)*Math.cos(-t1mid) - 3, O.sy + (r1+7)*Math.sin(-t1mid) + 3);
 
         ctx.fillStyle = 'rgba(251,146,60,0.7)';
-        const t2mid = theta2 / 2;
-        ctx.fillText('2θ', O.sx + (r2+8)*Math.cos(-t2mid) - 6, O.sy + (r2+8)*Math.sin(-t2mid) + 3);
+        const t2mid = thetaN / 2;
+        const arcLabel = fDef.angleMult === 2 ? '2θ' : '3θ';
+        ctx.fillText(arcLabel, O.sx + (r2+8)*Math.cos(-t2mid) - 6, O.sy + (r2+8)*Math.sin(-t2mid) + 3);
       }
 
-      // ── z² dot (orange) (Interaction B) ──
+      // ── f(z) dot (orange) ──
       ctx.beginPath();
-      ctx.arc(zqS.sx, zqS.sy, 6.5, 0, 2*Math.PI);
+      ctx.arc(fzS.sx, fzS.sy, 6.5, 0, 2*Math.PI);
       ctx.fillStyle = '#fb923c';
       ctx.fill();
       ctx.strokeStyle = 'rgba(255,255,255,0.5)';
@@ -271,9 +339,9 @@ export default function ComplexPlaneExplorer() {
       ctx.stroke();
       ctx.fillStyle = '#fb923c';
       ctx.font = 'bold 12px monospace';
-      ctx.fillText('z²', zqS.sx + 9, zqS.sy - 7);
+      ctx.fillText(fDef.nextLabel, fzS.sx + 9, fzS.sy - 7);
 
-      // ── z dot (blue, draggable) (Interaction A) ──
+      // ── z dot (blue, draggable) ──
       ctx.beginPath();
       ctx.arc(zS.sx, zS.sy, 9, 0, 2*Math.PI);
       ctx.fillStyle = '#38bdf8';
@@ -285,7 +353,6 @@ export default function ComplexPlaneExplorer() {
       ctx.font = 'bold 13px monospace';
       ctx.fillText('z', zS.sx + 11, zS.sy - 7);
 
-      // Drag hint
       if (!dragging.current) {
         ctx.fillStyle = 'rgba(148,163,184,0.4)';
         ctx.font = '11px monospace';
@@ -299,19 +366,57 @@ export default function ComplexPlaneExplorer() {
 
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [dims]);
+  }, [dims, visible]);
 
-  // Info panel values (from React state z, stays in sync with zRef via setZ)
-  const zq   = sqC(z.x, z.y);
+  const fDef = FORMULAS[formula];
+  const fz   = applyFormula(formula, z.x, z.y);
   const zm   = mag(z.x, z.y);
-  const zqm  = mag(zq.x, zq.y);
+  const fzm  = mag(fz.x, fz.y);
 
   const fmt = (x, y) => {
     const s = y < 0 ? '−' : '+';
     return `${x.toFixed(3)} ${s} ${Math.abs(y).toFixed(3)}i`;
   };
 
-  const canKeepGoing = !verdict && orbitLen < MAX_ORBIT;
+  const canKeepGoing = !verdict && orbitLen < fDef.maxOrbit;
+
+  const btnStyle = (active) => ({
+    background: 'transparent',
+    border: `2px solid ${active ? 'var(--accent-cyan)' : 'rgba(34,211,238,0.25)'}`,
+    color: active ? 'var(--accent-cyan)' : 'rgba(34,211,238,0.5)',
+    fontFamily: 'monospace',
+    fontSize: '11px',
+    padding: '0.25rem 0.6rem',
+    cursor: 'pointer',
+    transition: 'all 0.15s',
+  });
+
+  const verdictEl = verdict && (() => {
+    if (verdict.type === 'bounded') return (
+      <div style={verdictStyle('#4ade80')}>✓ Stays bounded</div>
+    );
+    if (verdict.type === 'escaped') return (
+      <div style={verdictStyle('#f87171')}>⚠ Escapes to ∞</div>
+    );
+    if (verdict.type === 'root') {
+      const r = NEWTON_ROOTS[verdict.rootIdx];
+      return <div style={verdictStyle(r.color)}>→ Converged to {r.label}</div>;
+    }
+    if (verdict.type === 'stuck') return (
+      <div style={verdictStyle('#94a3b8')}>? Did not converge</div>
+    );
+  })();
+
+  function verdictStyle(color) {
+    return {
+      fontFamily: 'monospace',
+      fontSize: '13px',
+      fontWeight: 'bold',
+      color,
+      padding: '0.2rem 0.6rem',
+      border: `1px solid ${color}55`,
+    };
+  }
 
   return (
     <div
@@ -333,15 +438,15 @@ export default function ComplexPlaneExplorer() {
 
       {/* ── Info panel ── */}
       <div style={{
-        padding: '0.8rem 1.1rem',
+        padding: '0.6rem 1.1rem',
         borderTop: '1px solid rgba(34,211,238,0.18)',
+        background: 'rgba(3,7,18,0.7)',
         display: 'flex',
         flexWrap: 'wrap',
-        gap: '0.75rem 1.5rem',
+        gap: '0.75rem 1rem',
         alignItems: 'center',
-        background: 'rgba(3,7,18,0.7)'
       }}>
-        {/* Coordinates */}
+        {/* Left: coordinates */}
         <div style={{ fontFamily: 'monospace', fontSize: '12.5px', lineHeight: 1.75, color: 'var(--text-main)', flexGrow: 1, minWidth: '220px' }}>
           <div>
             <span style={{ color: '#38bdf8', fontWeight: 'bold' }}>z</span>
@@ -349,13 +454,23 @@ export default function ComplexPlaneExplorer() {
             <span style={{ color: 'rgba(148,163,184,0.75)', marginLeft: '0.75rem' }}>|z| = {zm.toFixed(3)}</span>
           </div>
           <div>
-            <span style={{ color: '#fb923c', fontWeight: 'bold' }}>z²</span>
-            {' = '}{fmt(zq.x, zq.y)}
-            <span style={{ color: 'rgba(148,163,184,0.75)', marginLeft: '0.75rem' }}>|z²| = {zqm.toFixed(3)}</span>
+            <span style={{ color: '#fb923c', fontWeight: 'bold' }}>{fDef.nextLabel}</span>
+            {' = '}{fmt(fz.x, fz.y)}
+            <span style={{ color: 'rgba(148,163,184,0.75)', marginLeft: '0.75rem' }}>|{fDef.nextLabel}| = {fzm.toFixed(3)}</span>
           </div>
         </div>
 
-        {/* Buttons */}
+        {/* Center: formula switcher */}
+        <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+          <span style={{ fontFamily: 'monospace', fontSize: '11px', color: 'rgba(148,163,184,0.5)' }}>f:</span>
+          {Object.values(FORMULAS).map(f => (
+            <button key={f.id} onClick={() => setFormula(f.id)} style={btnStyle(formula === f.id)}>
+              {f.name}
+            </button>
+          ))}
+        </div>
+
+        {/* Right: action buttons + verdict */}
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexShrink: 0 }}>
           <button
             onClick={onKeepGoing}
@@ -372,7 +487,7 @@ export default function ComplexPlaneExplorer() {
               transition: 'opacity 0.2s'
             }}
           >
-            Keep going →
+            Iterate →
           </button>
           <button
             onClick={onReset}
@@ -388,21 +503,8 @@ export default function ComplexPlaneExplorer() {
           >
             Reset
           </button>
+          {verdictEl}
         </div>
-
-        {/* Verdict */}
-        {verdict && (
-          <div style={{
-            fontFamily: 'monospace',
-            fontSize: '13px',
-            fontWeight: 'bold',
-            color: verdict === 'bounded' ? '#4ade80' : '#f87171',
-            padding: '0.2rem 0.6rem',
-            border: `1px solid ${verdict === 'bounded' ? 'rgba(74,222,128,0.3)' : 'rgba(248,113,113,0.3)'}`,
-          }}>
-            {verdict === 'bounded' ? '✓ This point stays bounded' : '⚠ This point escapes to infinity'}
-          </div>
-        )}
       </div>
     </div>
   );
