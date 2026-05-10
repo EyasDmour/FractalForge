@@ -1,0 +1,32 @@
+[
+  {
+    "name": "Main Antenna Minibrot",
+    "x": -1.75,
+    "y": 0.0,
+    "width": 0.1
+  },
+  {
+    "name": "Lightning Tendrils",
+    "x": -0.11953251,
+    "y": 0.8524316,
+    "width": 0.08
+  },
+  {
+    "name": "Quad-Spiral Basin",
+    "x": -0.1528,
+    "y": 1.0397,
+    "width": 0.005
+  },
+  {
+    "name": "Seahorse Valley",
+    "x": -0.743643887037158,
+    "y": 0.131825904205311,
+    "width": 0.0001
+  },
+  {
+    "name": "Starfish Minibrot",
+    "x": -1.749957683926445,
+    "y": 0.0,
+    "width": 0.00000001
+  }
+]

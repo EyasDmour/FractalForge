@@ -2,16 +2,19 @@ import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { useVisible } from '../../hooks/useVisible';
 
 // Math helpers
-function getLineSegment(w, h) {
-  const width = w * 0.9;
-  const cx = w / 2;
-  const cy = h / 2 + 40; // slightly lower so spike has room to grow up
-  
-  const left = { x: cx - width / 2, y: cy };
-  const right = { x: cx + width / 2, y: cy };
-  
+function getTriangle(w, h) {
+  const s    = Math.min(w * 0.62, h * 0.72);
+  const cx   = w / 2;
+  const cy   = h / 2 + s * 0.06; // shift down slightly so centroid is visually centered
+  const triH = s * Math.sqrt(3) / 2;
+  const top  = { x: cx,         y: cy - triH * 2 / 3 };
+  const br   = { x: cx + s / 2, y: cy + triH / 3     };
+  const bl   = { x: cx - s / 2, y: cy + triH / 3     };
+  // Clockwise in screen coords → existing -PI/3 rotation produces outward spikes
   return [
-    { a: left, b: right }
+    { a: top, b: br  },
+    { a: br,  b: bl  },
+    { a: bl,  b: top },
   ];
 }
 
@@ -75,8 +78,8 @@ export default function KochCurve() {
   const oldSegmentsRef = useRef([]); // segments from previous iteration
   const animRef = useRef(null); // { startTime }
   
-  const MAX_ITERATIONS = 7;
-  const MAX_ANIMATED_ITERATIONS = 6;
+  const MAX_ITERATIONS = 5;
+  const MAX_ANIMATED_ITERATIONS = 5;
 
   // Responsive sizing
   useEffect(() => {
@@ -84,7 +87,7 @@ export default function KochCurve() {
       if (!containerRef.current) return;
       const rect = containerRef.current.getBoundingClientRect();
       const w = Math.floor(rect.width);
-      const h = Math.max(400, Math.min(600, Math.floor(w * 0.75)));
+      const h = Math.max(400, Math.min(600, Math.floor(w * 0.85)));
       setDimensions({ w, h });
     };
     observe();
@@ -96,12 +99,13 @@ export default function KochCurve() {
   // Initialize iteration 0 when canvas mounts/resizes
   useEffect(() => {
     if (iteration === 0 && !animRef.current) {
-      segmentsRef.current = getLineSegment(dimensions.w, dimensions.h);
+      segmentsRef.current = getTriangle(dimensions.w, dimensions.h);
     }
   }, [dimensions, iteration]);
 
   const handleNext = () => {
-    if (animRef.current || iteration >= MAX_ITERATIONS) return;
+    if (animRef.current) { animRef.current = null; return; } // skip animation
+    if (iteration >= MAX_ITERATIONS) return;
     
     const nextIter = iteration + 1;
     
@@ -123,7 +127,7 @@ export default function KochCurve() {
 
   const handleReset = () => {
     if (animRef.current) animRef.current = null;
-    segmentsRef.current = getLineSegment(dimensions.w, dimensions.h);
+    segmentsRef.current = getTriangle(dimensions.w, dimensions.h);
     setIteration(0);
   };
 
@@ -170,9 +174,9 @@ export default function KochCurve() {
         if (isSequential) {
           // Mode 1: Sequential Animation
           const N = oldSegmentsRef.current.length;
-          const maxTotalDuration = 3000; // cap time for many segments
-          const seqDuration = Math.min(150, maxTotalDuration / N);
-          const singleGrowDuration = 300;
+          const maxTotalDuration = 1200;
+          const seqDuration = Math.min(60, maxTotalDuration / N);
+          const singleGrowDuration = 120;
           const totalDuration = N * seqDuration + singleGrowDuration;
 
           if (elapsed >= totalDuration) {
@@ -226,8 +230,8 @@ export default function KochCurve() {
           });
         } else {
           // Mode 2: Simultaneous (Pulse then Grow)
-          const pulseDuration = 800;
-          const growDuration = 1800;
+          const pulseDuration = 300;
+          const growDuration = 700;
           const totalDuration = pulseDuration + growDuration;
 
           if (elapsed >= totalDuration) {
@@ -291,6 +295,7 @@ export default function KochCurve() {
           for (let i = 0; i < segments.length; i++) {
             ctx.lineTo(segments[i].b.x, segments[i].b.y);
           }
+          ctx.closePath();
           ctx.strokeStyle = '#22d3ee'; // Explicit cyan
           // Add stronger glow for static idle state
           ctx.shadowColor = '#22d3ee';
@@ -330,8 +335,7 @@ export default function KochCurve() {
           padding: '0.5rem', border: '1px solid var(--accent-cyan)'
         }}>
           <div>ITERATION: <span style={{color: 'var(--accent-neon)'}}>{iteration}</span></div>
-          <div>SEGMENTS: <span style={{color: 'var(--text-main)'}}>{Math.pow(4, iteration)}</span></div>
-          <div>TOTAL LENGTH: <span style={{color: 'var(--text-main)'}}>{Math.pow(4/3, iteration).toFixed(2)}s</span></div>
+          <div>SEGMENTS: <span style={{color: 'var(--text-main)'}}>{3 * Math.pow(4, iteration)}</span></div>
         </div>
       </div>
 

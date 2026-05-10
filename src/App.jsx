@@ -1,5 +1,8 @@
-import React from 'react';
+
+import useFaviconAnimation from './hooks/useFaviconAnimation';
 import Header from './components/Header';
+import QuizChallenge from './components/QuizChallenge';
+import NewtonReveal from './components/NewtonReveal';
 import Footer from './components/Footer';
 import ConceptSection from './components/ConceptSection';
 import FormulaCard from './components/FormulaCard';
@@ -14,8 +17,79 @@ import KochCurve from './components/visualizations/KochCurve';
 import MandelbrotExplorer from './components/visualizations/MandelbrotExplorer';
 import MandelbrotJuliaConnection from './components/visualizations/MandelbrotJuliaConnection';
 import NewtonFractal from './components/visualizations/NewtonFractal';
+import SierpinskiTriangle from './components/visualizations/SierpinskiTriangle';
+import SierpinskiLoop from './components/visualizations/SierpinskiLoop';
+import MandelbrotZoom from './components/visualizations/MandelbrotZoom';
+
+const carpetViz = (
+  <svg viewBox="0 0 280 115" width="100%" aria-hidden="true">
+    <text x="50" y="16" textAnchor="middle" fontFamily="JetBrains Mono, monospace" fontSize="9" fill="#64748b">ITERATION 0</text>
+    <text x="195" y="16" textAnchor="middle" fontFamily="JetBrains Mono, monospace" fontSize="9" fill="#64748b">ITERATION 1</text>
+    <text x="118" y="72" textAnchor="middle" fontFamily="JetBrains Mono, monospace" fontSize="16" fill="#c0ff00">→</text>
+    {/* Iter 0: full square */}
+    <rect x="10" y="25" width="80" height="80" fill="rgba(34,211,238,0.18)" stroke="#22d3ee" strokeWidth="1.5"/>
+    {/* Iter 1: 8 sub-squares (row, col) with center (1,1) removed */}
+    {[[0,0],[0,1],[0,2],[1,0],[1,2],[2,0],[2,1],[2,2]].map(([r,c]) => (
+      <rect key={`${r}${c}`} x={155 + c*27} y={25 + r*27} width="26" height="26"
+        fill="rgba(34,211,238,0.18)" stroke="#22d3ee" strokeWidth="0.75"/>
+    ))}
+    {/* Center cell: removed — dashed border + ✕ */}
+    <rect x="182" y="52" width="26" height="26" fill="none" stroke="#c0ff00" strokeWidth="1" strokeDasharray="3,2"/>
+    <text x="195" y="69" textAnchor="middle" fontFamily="JetBrains Mono, monospace" fontSize="11" fill="#c0ff00">✕</text>
+    {/* Outer border iter 1 */}
+    <rect x="155" y="25" width="81" height="81" fill="none" stroke="#22d3ee" strokeWidth="1.5"/>  
+  </svg>
+);
+
+const QUIZ_QUESTIONS = [
+  {
+    visual: carpetViz,
+    question: 'The Sierpinski Carpet is formed by dividing a square into a 3×3 grid of 9 sub-squares and removing the center one, then repeating on each remaining square. Using D = log(N) / log(1/r), what is its fractal dimension?',
+    options: [
+      'log(9) / log(3) = 2 ',
+      'log(8) / log(3) ≈ 1.893',
+      'log(8) / log(9) ≈ 0.946',
+      'log(4) / log(3) ≈ 1.262',
+    ],
+    answer: 1,
+    explanation: 'N = 8: the removed center square is gone, so only 8 copies remain. r = 1/3: each sub-square has 1/3 the side length of the original. D = log(8)/log(3) ≈ 1.893 — nearly 2, meaning the carpet almost fills the plane, held back only by infinitely many holes.',
+  },
+  {
+    question: 'The Newton fractal for f(z) = z³ − 1 produces 3 colored basins of attraction — one per root. If we change the formula to f(z) = z⁴ − 1, how many distinct basins will the resulting fractal have?',
+    options: [
+      '3',
+      '4',
+      '6',
+      'Infinitely many',
+    ],
+    answer: 1,
+    explanation: 'z⁴ = 1 has exactly 4 roots: 1, i, −1, and −i — the 4th roots of unity, evenly spaced at 90° intervals on the unit circle. Each root attracts a basin of nearby starting points. The boundary between all four basins remains infinitely complex — and the third color always appears on the boundary between any two.',
+    revealVisual: <NewtonReveal />,
+  },
+  {
+    question: 'You set your Julia set constant to c = 2.5 + 0i. Without generating the image, will the resulting Julia set be a connected shape or disconnected dust?',
+    options: [
+      'Connected',
+      'Disconnected dust',
+      'Impossible to determine without running the iteration algorithm',
+    ],
+    answer: 1,
+    explanation: 'The entire Mandelbrot set fits within |c| ≤ 2. Since |2.5 + 0i| = 2.5 > 2, this point is definitively outside. The Grand Connection rule: c outside the Mandelbrot set → the corresponding Julia set is disconnected dust, not a solid shape.',
+  },
+  {
+    question: 'You\'re printing an infinitely-iterated Koch snowflake. Black ink traces the exact boundary (perimeter). Blue ink fills the interior area. As n → ∞, which ink do you run out of first?',
+    options: [
+      'Blue',
+      'Black',
+      'Both simultaneously',
+    ],
+    answer: 1,
+    explanation: 'The perimeter Pₙ = 3s(4/3)ⁿ → ∞ since 4/3 > 1 — infinite black ink. The enclosed area converges to a finite value (8/5 of the original triangle area) — finite blue ink. This is the Koch snowflake\'s central paradox: an infinite boundary enclosing a strictly finite area.',
+  },
+];
 
 function App() {
+  useFaviconAnimation();
   return (
     <>
       <Header />
@@ -30,40 +104,67 @@ function App() {
         <p style={{ fontSize: '1.3rem', color: 'var(--text-dim)', maxWidth: '700px', marginBottom: '2rem', lineHeight: '1.8' }}>
           Fractals are structures created by repeating simple rules. They can look complex, but the rules behind them are often surprisingly basic. This website turns those rules into interactive experiences — so you don't just read about fractals, you <strong style={{ color: 'var(--accent-neon)' }}>explore</strong> them.
         </p>
-        <a href="#dimension" className="btn-tech">BEGIN_EXPLORATION</a>
+        <a href="#module-1" className="btn-tech">BEGIN_EXPLORATION</a>
       </section>
 
-      {/* ═══ 1. FRACTAL DIMENSION ═══ */}
-      <ConceptSection id="dimension" index={1} title="Fractal Dimension" subtitle="// BETWEEN A LINE AND A PLANE"
+      {/* ═══ 1. ITERATION & SIERPINSKI ═══ */}
+      <ConceptSection id="module-1" index={1} title="Iteration" subtitle="// REPEATED RULES → COMPLEX STRUCTURES"
+        viz={<SierpinskiTriangle />}
         content={<>
           <p>
-            Normal geometry: a line is 1D, a square is 2D, a cube is 3D. But the Koch curve doesn't fit neatly — it's more complex than a line, yet doesn't fill a plane. Its dimension is <strong>between 1 and 2.</strong>
+            A <strong>fractal</strong> is a structure generated by repeatedly applying a simple rule. This process is called <strong>iteration</strong> — repeating the same operation again and again.
           </p>
           <p>
-            Fractal dimension doesn't mean a strange physical axis. It measures <span className="highlight">how the pattern fills space as you zoom in.</span>
+            At first, the rule looks simple. But after many repetitions, the result becomes highly detailed and complex. This is one of the core ideas behind fractals: <span className="highlight">a simple repeated rule creates a complex structure.</span>
           </p>
-          <FormulaCard
-            formula="D = \frac{\log(N)}{\log(1/r)}"
-            description="N = number of self-similar copies, r = scale factor of each copy."
-          />
-          <div className="compare-row">
-            <div className="compare-card">
-              <h4>LINE → D = 1</h4>
-              <p>2 copies, r = 1/2<br/><InlineMath math="2 = 2^1" /></p>
-            </div>
-            <div className="compare-card">
-              <h4>SQUARE → D = 2</h4>
-              <p>4 copies, r = 1/2<br/><InlineMath math="4 = 2^2" /></p>
-            </div>
+          <div className="callout">
+            <strong>Sierpinski triangle:</strong> Start with one equilateral triangle. Mark the midpoints of each side. Connect them — this divides the triangle into four smaller ones. Remove the center triangle. Repeat on each remaining triangle. The result approaches the famous Sierpinski triangle.
           </div>
-          <p className="mt-4">
-            Koch curve: <InlineMath math="N = 4" /> copies, each at scale <InlineMath math="r = 1/3" />. So <InlineMath math="D = \log(4)/\log(3) \approx 1.262" /> — more complex than a line, less than a filled area. The boundary is fractal; the filled region inside remains 2D.
+          <p>
+            The strange thing: the rule is trivial, but the final structure has infinite detail and perfect self-similarity — zoom in and you see the same pattern at every scale.
           </p>
         </>}
       />
 
-      {/* ═══ 2. COMPLEX PLANE ═══ */}
-      <ConceptSection id="complex" index={2} title="Complex Plane" subtitle="// THE CANVAS FOR FORMULA-BASED FRACTALS"
+      {/* ═══ 2. GEOMETRIC vs FORMULA-BASED ═══ */}
+      <ConceptSection id="module-2" index={2} title="Two Types" subtitle="// GEOMETRIC vs FORMULA-BASED FRACTALS"
+        viz={
+          <div style={{ display: 'flex', gap: '1.5rem' }}>
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              <div style={{ textAlign: 'center', fontFamily: 'var(--font-display)', fontSize: '0.7rem', color: 'var(--text-dim)', letterSpacing: '0.1em' }}>GEOMETRIC</div>
+              <SierpinskiLoop />
+            </div>
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              <div style={{ textAlign: 'center', fontFamily: 'var(--font-display)', fontSize: '0.7rem', color: 'var(--text-dim)', letterSpacing: '0.1em' }}>FORMULA-BASED</div>
+              <MandelbrotZoom />
+            </div>
+          </div>
+        }
+        content={<>
+          <p>
+            The Sierpinski triangle is a <strong>geometric fractal</strong> — created by directly modifying a shape using a repeated construction rule (divide, remove, copy, replace).
+          </p>
+          <p>
+            But geometric construction isn't the only path. <strong>Formula-based fractals</strong> start with a number, plug it into a formula, and feed the result back in. After many iterations, we observe behavior: does the value settle? Escape? Spiral? The fractal appears when we color points based on that behavior.
+          </p>
+          <div className="compare-row">
+            <div className="compare-card">
+              <h4>GEOMETRIC</h4>
+              <p>Rule acts directly on a <strong>shape</strong>. Structure visible immediately.</p>
+            </div>
+            <div className="compare-card">
+              <h4>FORMULA-BASED</h4>
+              <p>Rule acts on <strong>numbers</strong>. Shape appears after visualizing behavior.</p>
+            </div>
+          </div>
+          <p>
+            Fractal Forge covers both sides: geometric fractals (Sierpinski, Koch) and formula-based fractals (Mandelbrot, Julia, Newton).
+          </p>
+        </>}
+      />
+
+      {/* ═══ 3. COMPLEX PLANE ═══ */}
+      <ConceptSection id="complex" index={3} title="Complex Plane" subtitle="// THE CANVAS FOR FORMULA-BASED FRACTALS"
         content={<>
           <p>
             To understand formula-based fractals, we need the <strong>complex plane</strong>. A complex number has a real part and an imaginary part:
@@ -79,33 +180,56 @@ function App() {
             <strong>Squaring a Complex Number:</strong> Squaring doubles the angle and squares the modulus. <strong>Drag the blue point</strong>: inside the unit circle, <InlineMath math="z^2" /> collapses toward the origin; outside, it shoots away. The unit circle is the boundary between collapse and escape — and the dashed circle at <InlineMath math="r=2" /> is the escape radius every Julia/Mandelbrot calculation uses. Click <strong>"Keep going →"</strong> to iterate <InlineMath math="z \to z^2" /> repeatedly and see whether the orbit stays bounded or escapes.
           </div>
           <div className="callout" style={{ borderLeftColor: 'var(--accent-neon)', marginTop: '1rem' }}>
-            <strong>Next stage:</strong> So far you've been squaring <InlineMath math="z" /> repeatedly. In the next stage we add one more thing: <InlineMath math="z \to z^2 + c" />. That small change — adding a fixed complex number <InlineMath math="c" /> — is what creates the <strong>Julia set</strong>. Try it.
+            <strong>Next stage:</strong> So far you've been squaring <InlineMath math="z" /> repeatedly. The next section adds one more thing: <InlineMath math="z \to z^2 + c" />. That small change — adding a fixed complex number <InlineMath math="c" /> — is what Mandelbrot studied.
           </div>
         </>}
         viz={<ComplexPlaneExplorer />}
       />
 
-      {/* ═══ 3. WHAT MANDELBROT FOUND ═══ */}
-      <ConceptSection id="formula-explorer" index={3} title="What Mandelbrot Found" subtitle="// z → z² + c  — TWO POINTS, ONE FORMULA" needsEdit
+      {/* ═══ 4. WHAT MANDELBROT FOUND ═══ */}
+      <ConceptSection id="formula-explorer" index={4} title="What Mandelbrot Found" subtitle="// z → z² + c  — TWO POINTS, ONE FORMULA"
         content={<>
           <p>
             Benoit Mandelbrot studied what happens when you iterate <InlineMath math="z \to z^2 + c" /> for different starting points <InlineMath math="z_0" /> and constants <InlineMath math="c" />. The key discovery: the behavior depends entirely on <strong>where you start and what constant you add.</strong>
           </p>
           <p>
-            Some combinations produce orbits that stay bounded forever — spiraling toward a fixed point or cycling. Others escape to infinity immediately. The line between these two outcomes is infinitely complex.
+            Some combinations produce orbits that stay bounded forever — spiraling toward a fixed point or cycling. Others escape to infinity. The line between these two outcomes is infinitely complex.
           </p>
           <div className="callout">
             <strong>Try it below:</strong> Drag the blue <InlineMath math="z_0" /> and green <InlineMath math="c" /> points. Click <strong>Run orbit</strong> to watch the sequence <InlineMath math="z_0, z_0^2+c, (z_0^2+c)^2+c, \ldots" /> step by step. Toggle <strong>paint dots</strong> and move your mouse to color the plane by outcome. Toggle <strong>hover orbit</strong> to preview any point's fate instantly.
+          </div>
+          <div className="callout" style={{ borderLeftColor: 'var(--accent-neon)', marginTop: '1rem' }}>
+            <strong>Next stage:</strong> You've been exploring individual orbits — one <InlineMath math="z_0" />, one <InlineMath math="c" /> at a time. The Mandelbrot set does this for every possible <InlineMath math="c" /> simultaneously: always starting at <InlineMath math="z_0 = 0" />, it maps out exactly which values lead to bounded orbits and which escape.
           </div>
         </>}
         viz={<FormulaExplorer />}
       />
 
-      {/* ═══ 4. JULIA SET ═══ */}
-      <ConceptSection id="julia" index={4} title="Julia Set" subtitle="// ONE FORMULA, INFINITE WORLDS"
+      {/* ═══ 5. MANDELBROT SET ═══ */}
+      <ConceptSection id="mandelbrot" index={5} title="Mandelbrot Set" subtitle="// A MAP OF POSSIBLE BEHAVIORS"
+        viz={<MandelbrotExplorer />}
         content={<>
           <p>
-            The Julia set uses a repeated formula. Pick a fixed constant <InlineMath math="c" />, then test many different starting values of <InlineMath math="z" /> (each pixel = one starting value):
+            Same formula — <InlineMath math="z \to z^2 + c" /> — but now we always start with <InlineMath math="z_0 = 0" /> and let <InlineMath math="c" /> vary. Each pixel represents a different value of <InlineMath math="c" />.
+          </p>
+          <FormulaCard
+            formula="z_{n+1} = z_n^2 + c \quad (z_0 = 0)"
+            description="If the sequence stays bounded → c belongs to the Mandelbrot set."
+          />
+          <p>
+            The Mandelbrot set is famous for its boundary: <span className="highlight">no matter how far you zoom, new structures keep appearing.</span> Some parts look like the whole set. Others reveal entirely new patterns.
+          </p>
+          <p>
+            But it's more than a beautiful image. It's a <strong>map of possible behaviors</strong> — each point represents a value of <InlineMath math="c" />, which determines an entire Julia set. The Mandelbrot set is a map of Julia sets.
+          </p>
+        </>}
+      />
+
+      {/* ═══ 6. JULIA SET ═══ */}
+      <ConceptSection id="julia" index={6} title="Julia Set" subtitle="// ONE FORMULA, INFINITE WORLDS"
+        content={<>
+          <p>
+            The Julia set flips the roles. Instead of fixing <InlineMath math="z_0 = 0" /> and varying <InlineMath math="c" />, we fix <InlineMath math="c" /> and test every possible starting value of <InlineMath math="z" /> (each pixel = one starting value):
           </p>
           <FormulaCard
             formula="z_{n+1} = z_n^2 + c"
@@ -118,37 +242,14 @@ function App() {
             The fascinating part: <span className="highlight">a small change in <InlineMath math="c" /> creates a completely different Julia set.</span> One value produces a connected shape. Another produces scattered dust. Another produces spirals or branch-like structures. The constant <InlineMath math="c" /> controls the "personality" of the fractal.
           </p>
           <div className="callout">
-            <strong>Try it below:</strong> Drag the green <InlineMath math="c" /> point (or use the sliders) — every move shifts the offset added after squaring. Drag the blue <InlineMath math="z_0" /> to pick a starting point and click <strong>Run orbit</strong> to watch its trajectory step by step. Then click <strong>Generate Julia set</strong> to test every pixel at once: bounded points form the colored set, escaping points are colored by <em>how fast</em> they leave. Hover any pixel to preview that point's orbit.
-          </div>
-          <div className="callout" style={{ borderLeftColor: 'var(--accent-neon)', marginTop: '1rem' }}>
-            <strong>Next stage:</strong> You've seen that different values of <InlineMath math="c" /> create different Julia sets — some are connected blobs, some are scattered dust. Is there a pattern to <em>which</em> <InlineMath math="c" /> values produce which kind of shape? That's the <strong>Mandelbrot set</strong>.
+            <strong>Try it below:</strong> Drag the green <InlineMath math="c" /> point (or use the sliders) — every move shifts the offset added after squaring. Drag the blue <InlineMath math="z_0" /> to pick a starting point and click <strong>Run orbit</strong> to watch its trajectory step by step. Then click <strong>Generate Julia set</strong> to test every pixel at once: bounded points form the colored set, escaping points are colored by <em>how fast</em> they leave.
           </div>
         </>}
         viz={<JuliaSetGenerator />}
       />
 
-      {/* ═══ 5. MANDELBROT SET ═══ */}
-      <ConceptSection id="mandelbrot" index={5} title="Mandelbrot Set" subtitle="// A MAP OF POSSIBLE BEHAVIORS"
-        viz={<MandelbrotExplorer />}
-        content={<>
-          <p>
-            Same formula as Julia — but the roles flip. We always start with <InlineMath math="z_0 = 0" /> and let <InlineMath math="c" /> change. Each pixel represents a different value of <InlineMath math="c" />.
-          </p>
-          <FormulaCard
-            formula="z_{n+1} = z_n^2 + c \quad (z_0 = 0)"
-            description="If the sequence stays bounded → c belongs to the Mandelbrot set."
-          />
-          <p>
-            The Mandelbrot set is famous for its boundary: <span className="highlight">no matter how far you zoom, new structures keep appearing.</span> Some parts look like the whole set. Others reveal entirely new patterns.
-          </p>
-          <p>
-            But it's more than a beautiful image. It's a <strong>map of possible behaviors</strong> — each point represents a value of <InlineMath math="c" />, which can generate a unique Julia set. The Mandelbrot set is a map of Julia sets.
-          </p>
-        </>}
-      />
-
-      {/* ═══ 6. THE GRAND CONNECTION ═══ */}
-      <ConceptSection id="relationship" index={6} title="The Grand Connection" subtitle="// MANDELBROT = CONTROL MAP. JULIA = RESULT."
+      {/* ═══ 7. THE GRAND CONNECTION ═══ */}
+      <ConceptSection id="relationship" index={7} title="The Grand Connection" subtitle="// MANDELBROT = CONTROL MAP. JULIA = RESULT."
         content={<>
           <p>
             Julia and Mandelbrot use the same formula but ask different questions:
@@ -170,8 +271,8 @@ function App() {
         viz={<MandelbrotJuliaConnection />}
       />
 
-      {/* ═══ 7. NEWTON FRACTAL ═══ */}
-      <ConceptSection id="newton" index={7} title="Newton's Fractal" subtitle="// WHEN EQUATION-SOLVING CREATES ART"
+      {/* ═══ 8. NEWTON FRACTAL ═══ */}
+      <ConceptSection id="newton" index={8} title="Newton's Fractal" subtitle="// WHEN EQUATION-SOLVING CREATES ART"
         viz={<NewtonFractal />}
         content={<>
           <p>
@@ -216,51 +317,8 @@ function App() {
         </>}
       />
 
-      {/* ═══ 8. ITERATION & SIERPINSKI ═══ */}
-      <ConceptSection id="module-1" index={8} title="Iteration" subtitle="// REPEATED RULES → COMPLEX STRUCTURES"
-        content={<>
-          <p>
-            A <strong>fractal</strong> is a structure generated by repeatedly applying a simple rule. This process is called <strong>iteration</strong> — repeating the same operation again and again.
-          </p>
-          <p>
-            At first, the rule looks simple. But after many repetitions, the result becomes highly detailed and complex. This is one of the core ideas behind fractals: <span className="highlight">a simple repeated rule creates a complex structure.</span>
-          </p>
-          <div className="callout">
-            <strong>Sierpinski triangle:</strong> Start with one equilateral triangle. Mark the midpoints of each side. Connect them — this divides the triangle into four smaller ones. Remove the center triangle. Repeat on each remaining triangle. The result approaches the famous Sierpinski triangle.
-          </div>
-          <p>
-            The strange thing: the rule is trivial, but the final structure has infinite detail and perfect self-similarity — zoom in and you see the same pattern at every scale.
-          </p>
-        </>}
-      />
-
-      {/* ═══ 9. GEOMETRIC vs FORMULA-BASED ═══ */}
-      <ConceptSection id="module-2" index={9} title="Two Types" subtitle="// GEOMETRIC vs FORMULA-BASED FRACTALS"
-        content={<>
-          <p>
-            The Sierpinski triangle is a <strong>geometric fractal</strong> — created by directly modifying a shape using a repeated construction rule (divide, remove, copy, replace).
-          </p>
-          <p>
-            But geometric construction isn't the only path. <strong>Formula-based fractals</strong> start with a number, plug it into a formula, and feed the result back in. After many iterations, we observe behavior: does the value settle? Escape? Spiral? The fractal appears when we color points based on that behavior.
-          </p>
-          <div className="compare-row">
-            <div className="compare-card">
-              <h4>GEOMETRIC</h4>
-              <p>Rule acts directly on a <strong>shape</strong>. Structure visible immediately.</p>
-            </div>
-            <div className="compare-card">
-              <h4>FORMULA-BASED</h4>
-              <p>Rule acts on <strong>numbers</strong>. Shape appears after visualizing behavior.</p>
-            </div>
-          </div>
-          <p>
-            Fractal Forge covers both sides: geometric fractals (Sierpinski, Koch) and formula-based fractals (Julia, Mandelbrot, Newton).
-          </p>
-        </>}
-      />
-
-      {/* ═══ 10. KOCH SNOWFLAKE ═══ */}
-      <ConceptSection id="geometric" index={10} title="Koch Snowflake" subtitle="// INFINITE PERIMETER, FINITE AREA"
+      {/* ═══ 9. KOCH SNOWFLAKE ═══ */}
+      <ConceptSection id="geometric" index={9} title="Koch Snowflake" subtitle="// INFINITE PERIMETER, FINITE AREA"
         content={<>
           <p>
             The Koch snowflake starts as an equilateral triangle. For every side: divide into three equal parts, remove the middle third, replace it with two sides of a smaller outward triangle. Every straight segment becomes four smaller segments. Repeat.
@@ -304,6 +362,69 @@ function App() {
           </DeepDiveButton>
         </>}
         viz={<KochCurve />}
+      />
+
+      {/* ═══ 10. FRACTAL DIMENSION ═══ */}
+      <ConceptSection id="dimension" index={10} title="Fractal Dimension" subtitle="// BETWEEN A LINE AND A PLANE"
+        content={<>
+          <p>
+            Normal geometry: a line is 1D, a square is 2D, a cube is 3D. But the Koch curve doesn't fit neatly — it's more complex than a line, yet doesn't fill a plane. Its dimension is <strong>between 1 and 2.</strong>
+          </p>
+          <p>
+            Fractal dimension doesn't mean a strange physical axis. It measures <span className="highlight">how the pattern fills space as you zoom in.</span>
+          </p>
+          <FormulaCard
+            formula="D = \frac{\log(N)}{\log(1/r)}"
+            description="N = number of self-similar copies, r = scale factor of each copy."
+          />
+          <div className="compare-row">
+            <div className="compare-card">
+              <svg viewBox="0 0 240 68" width="100%" style={{ display: 'block', marginBottom: '0.75rem' }} aria-hidden="true">
+                <rect x="20" y="30" width="100" height="16" fill="rgba(34,211,238,0.12)"/>
+                <rect x="120" y="30" width="100" height="16" fill="rgba(192,255,0,0.07)"/>
+                <line x1="20" y1="38" x2="220" y2="38" stroke="#22d3ee" strokeWidth="2.5"/>
+                <line x1="20" y1="30" x2="20" y2="46" stroke="#22d3ee" strokeWidth="2"/>
+                <line x1="220" y1="30" x2="220" y2="46" stroke="#22d3ee" strokeWidth="2"/>
+                <line x1="120" y1="26" x2="120" y2="50" stroke="#c0ff00" strokeWidth="1.5" strokeDasharray="3,2"/>
+                <text x="70" y="22" textAnchor="middle" fontFamily="JetBrains Mono, monospace" fontSize="8" fill="#22d3ee" opacity="0.9">COPY 1</text>
+                <text x="170" y="22" textAnchor="middle" fontFamily="JetBrains Mono, monospace" fontSize="8" fill="#c0ff00" opacity="0.9">COPY 2</text>
+                <text x="120" y="62" textAnchor="middle" fontFamily="JetBrains Mono, monospace" fontSize="7.5" fill="#64748b">N = 2 · r = ½</text>
+              </svg>
+              <h4>LINE → D = 1</h4>
+              <p>2 copies, r = 1/2<br/><InlineMath math="2 = 2^1" /></p>
+            </div>
+            <div className="compare-card">
+              <svg viewBox="0 0 110 110" width="110" height="110" style={{ display: 'block', margin: '0 auto 0.75rem' }} aria-hidden="true">
+                <rect x="5" y="5" width="50" height="50" fill="rgba(34,211,238,0.15)"/>
+                <rect x="55" y="5" width="50" height="50" fill="rgba(192,255,0,0.08)"/>
+                <rect x="5" y="55" width="50" height="50" fill="rgba(192,255,0,0.08)"/>
+                <rect x="55" y="55" width="50" height="50" fill="rgba(34,211,238,0.15)"/>
+                <rect x="5" y="5" width="100" height="100" fill="none" stroke="#22d3ee" strokeWidth="2"/>
+                <line x1="55" y1="7" x2="55" y2="103" stroke="#c0ff00" strokeWidth="1.5" strokeDasharray="4,2"/>
+                <line x1="7" y1="55" x2="103" y2="55" stroke="#c0ff00" strokeWidth="1.5" strokeDasharray="4,2"/>
+                <text x="30" y="34" textAnchor="middle" fontFamily="JetBrains Mono, monospace" fontSize="9" fill="#22d3ee">C1</text>
+                <text x="80" y="34" textAnchor="middle" fontFamily="JetBrains Mono, monospace" fontSize="9" fill="#c0ff00">C2</text>
+                <text x="30" y="84" textAnchor="middle" fontFamily="JetBrains Mono, monospace" fontSize="9" fill="#c0ff00">C3</text>
+                <text x="80" y="84" textAnchor="middle" fontFamily="JetBrains Mono, monospace" fontSize="9" fill="#22d3ee">C4</text>
+              </svg>
+              <h4>SQUARE → D = 2</h4>
+              <p>4 copies, r = 1/2<br/><InlineMath math="4 = 2^2" /></p>
+            </div>
+          </div>
+          <p className="mt-4">
+            Koch curve: <InlineMath math="N = 4" /> copies, each at scale <InlineMath math="r = 1/3" />. So <InlineMath math="D = \log(4)/\log(3) \approx 1.262" /> — more complex than a line, less than a filled area. The boundary is fractal; the filled region inside remains 2D.
+          </p>
+        </>}
+      />
+
+      {/* ═══ 11. CHALLENGE ═══ */}
+      <ConceptSection id="challenge" index={11} title="Critical Thinking Challenge" subtitle="// TEST YOUR UNDERSTANDING"
+        content={<>
+          <p>
+            Academic challenge to test deep concept understanding and whether the core ideas have landed — dimension, self-similarity, iteration, and the relationship between different fractal types.
+          </p>
+        </>}
+        quiz={<QuizChallenge questions={QUIZ_QUESTIONS} />}
       />
 
       <Footer />
